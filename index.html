@@ -4,28 +4,30 @@
   Client-Side Phishing Detection & Educational Engine
   Built by Tanay Mathur, B.Tech CSE
 
-  HOW THE ENGINE WORKS:
-  1. Tokenizer & Normalizer:
-     Splits untrusted input into normalized tokens, character spans, URLs, and
-     RFC 5322 header fields without executing, fetching, or rendering raw HTML.
-  2. Multi-Layer Rules Engine:
-     - Message Analyzer: Scans text against weighted regex and phrase rules across
-       9 categories (Urgency, Fear/Threats, Credential Harvesting, Money Bait,
-       Generic Greetings, Brand Impersonation with Mismatched Links, Indian-Context
-       Scams [KYC, UPI, Electricity, Customs, Fake Jobs], Grammar/Punctuation
-       Anomalies, and Risky Attachment Extensions). Records exact [start, end]
-       character offsets for non-overlapping inline annotation.
-     - Link Analyzer: Parses URLs via the native URL API, defangs the output,
-       inspects TLDs, shorteners, raw IPs, @-tricks, punycode (xn--), mixed-script
-       homographs, and runs a Levenshtein + homoglyph skeleton comparator against
-       65+ global and Indian brands/banks.
-     - Header Parser: Unfolds RFC 5322 headers, compares From / Reply-To /
-       Return-Path domains, checks Display Name spoofing, parses SPF/DKIM/DMARC
-       authentication results, and reconstructs the Received hop timeline.
-  3. Transparent Scorer & DOM Renderer:
-     Sums capped signal weights into a 0-100 risk score, maps to 4 verdict tiers,
-     and constructs highlighted text strictly via DOM TextNodes (zero raw innerHTML)
-     to guarantee complete XSS safety.
+  ROOT CAUSE FIX & HOW THE REBUILT ENGINE WORKS:
+  1. Offset-Preserving Normalizer:
+     Strips zero-width characters, collapses whitespace, lowercases text, and
+     builds a parallel lookalike-normalized string (0->o, 1/l/!->i, @->a, $->s)
+     while maintaining a 1-to-1 character offset map back to the raw input so
+     every matched phrase highlights the exact span in the user's original text.
+  2. Multi-Layer Rules Engine + Combo Bonuses:
+     - Evaluates 18 weighted message rules across English & Hinglish (OTP/Credential
+       requests with warning-phrase exclusions, Credential Harvesting, Account
+       Threats, Urgency, KYC/PAN/Aadhaar bait, Refund/Prize bait, Payment-Failure
+       bait, Utility Disconnection scams, Fake Job/Internship fees, CEO/Gift Card
+       fraud, Unexpected Transaction bait, Authority Impersonation, Generic
+       Greetings, Vague Senders, Past-Conversation lures, Contact-by-Phone bait,
+       Secrecy, and Risky Attachments).
+     - Extracts all embedded URLs (including scheme-less shorteners like bit.ly/...)
+       and adds full link rule weights (Suspicious TLDs, Shorteners, Lookalike
+       Brands via Levenshtein + homoglyph skeleton matching across 65+ global &
+       Indian brands, Brand Mismatch, Hyphen/Bait domains, Untrusted Doc-Share
+       domains, Raw IPs, @ tricks, and HTTP without HTTPS).
+     - Applies Combo Bonuses when dangerous signal combinations co-occur.
+  3. Transparent Scorer & Safe DOM Renderer:
+     Caps total score at 100, maps to 4 honest verdict bands (0-9 "No known
+     patterns found", 10-29 "Be careful", 30-59 "Likely phishing", 60-100
+     "Dangerous"), and renders inline highlights using DOM TextNodes only.
   ==============================================================================
 -->
 <!DOCTYPE html>
@@ -115,6 +117,7 @@
       padding: 0 24px;
     }
 
+    /* Top Bar */
     .topbar {
       border-bottom: 1px solid var(--line);
       background-color: var(--bg);
@@ -244,6 +247,7 @@
       border-radius: 2px;
     }
 
+    /* Thin Progress Bar */
     .progress-bar-track {
       width: 100%;
       height: 2px;
@@ -265,6 +269,7 @@
       opacity: 1;
     }
 
+    /* Main Workspace */
     main {
       flex: 1;
       padding: 48px 0 72px;
@@ -304,6 +309,7 @@
       line-height: 1.55;
     }
 
+    /* Two-column Swiss Grid on Desktop */
     .workspace-grid {
       display: grid;
       grid-template-columns: 1fr;
@@ -322,6 +328,7 @@
       }
     }
 
+    /* Input Panel */
     .input-card {
       background-color: var(--surface);
       border: 1px solid var(--line);
@@ -470,6 +477,7 @@
       text-decoration-color: var(--ink);
     }
 
+    /* Examples Drawer */
     .examples-drawer {
       margin-top: 16px;
       padding-top: 16px;
@@ -606,7 +614,7 @@
       border-bottom-color: var(--vermilion);
     }
 
-    .lure-mark.severity-medium {
+    .lure-mark.severity-caution {
       background-color: var(--amber-soft);
       color: var(--ink);
       border-bottom-color: var(--amber);
@@ -618,7 +626,6 @@
       box-shadow: 0 0 0 2px var(--ink);
     }
 
-    /* Tooltip / Popover for active annotation */
     .annotation-tooltip {
       margin-top: 12px;
       padding: 14px 16px;
@@ -644,7 +651,7 @@
     }
 
     .tooltip-meta.is-high { color: var(--vermilion); }
-    .tooltip-meta.is-medium { color: var(--amber); }
+    .tooltip-meta.is-caution { color: var(--amber); }
 
     .tooltip-title {
       font-weight: 600;
@@ -657,6 +664,7 @@
       color: var(--ink-secondary);
     }
 
+    /* Breakdown Panels (Link & Headers) */
     .breakdown-panel {
       margin-top: 24px;
       border-top: 1px solid var(--line);
@@ -817,6 +825,7 @@
       word-break: break-all;
     }
 
+    /* Results Column */
     .results-column[hidden] {
       display: none;
     }
@@ -913,12 +922,13 @@
     .disclaimer-line {
       font-family: var(--font-mono);
       font-size: 0.75rem;
-      color: var(--ink-muted);
-      padding: 10px 12px;
+      color: var(--ink);
+      padding: 12px 14px;
       background-color: var(--bg);
-      border: 1px solid var(--line);
+      border: 1px solid var(--line-strong);
       border-radius: var(--radius);
       margin-bottom: 24px;
+      line-height: 1.55;
     }
 
     .section-heading {
@@ -987,7 +997,7 @@
       color: var(--vermilion);
     }
 
-    .finding-weight.is-medium {
+    .finding-weight.is-caution {
       background-color: var(--amber-soft);
       color: var(--amber);
     }
@@ -1158,6 +1168,7 @@
       color: var(--ink);
     }
 
+    /* Quiz Section & Self-Test Panel */
     .quiz-section[hidden] {
       display: none;
     }
@@ -1231,18 +1242,51 @@
       background-color: var(--surface-subtle);
     }
 
-    .selftest-banner {
-      margin-top: 24px;
-      padding: 16px 20px;
+    /* Self-Test Panel (#selftest) */
+    .selftest-panel {
+      margin-top: 36px;
+      padding: 24px;
       border: 1px solid var(--ink);
       border-radius: var(--radius);
       background-color: var(--surface);
-      font-family: var(--font-mono);
-      font-size: 0.8125rem;
     }
 
-    .selftest-banner[hidden] {
+    .selftest-panel[hidden] {
       display: none;
+    }
+
+    .selftest-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .selftest-title {
+      font-family: var(--font-display);
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .selftest-table-wrap {
+      overflow-x: auto;
+    }
+
+    .selftest-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+    }
+
+    .selftest-table th,
+    .selftest-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
     }
 
     .site-footer {
@@ -1255,7 +1299,7 @@
 
     .footer-inner {
       display: flex;
-       flex-direction: column;
+      flex-direction: column;
       gap: 10px;
     }
 
@@ -1338,7 +1382,7 @@
             <textarea
               id="mainInput"
               class="lure-textarea"
-              placeholder="e.g. Dear customer, your SBI account will be suspended within 24 hours due to incomplete KYC. Update immediately at http://sbi-kyc-update.xyz..."
+              placeholder="e.g. Sir aapka account band ho jayega aaj raat. Abhi KYC update karo is link par: http://hdfc-kyc-update.top..."
               spellcheck="false"
             ></textarea>
 
@@ -1363,7 +1407,7 @@
             <!-- Signature Feature: Annotated Text Container (Message Mode) -->
             <div class="annotated-container" id="annotatedContainer" hidden>
               <div class="annotated-header">
-                <span class="input-label">ANNOTATED MESSAGE (TAP HIGHLIGHT FOR REASON)</span>
+                <span class="input-label">ANNOTATED MESSAGE (TAP OR HOVER HIGHLIGHT FOR REASON)</span>
                 <div class="annotated-legend">
                   <span class="legend-item"><span class="legend-swatch is-danger"></span> High risk</span>
                   <span class="legend-item"><span class="legend-swatch is-warn"></span> Caution</span>
@@ -1424,7 +1468,7 @@
                 <span class="score-number" id="scoreValue">0</span>
                 <span class="score-max">/ 100</span>
               </div>
-              <span class="verdict-badge tier-safe" id="verdictBadge">Looks safe</span>
+              <span class="verdict-badge tier-safe" id="verdictBadge">No known patterns found</span>
             </div>
 
             <div class="score-meter-track" aria-hidden="true">
@@ -1434,6 +1478,7 @@
             <p class="score-summary" id="scoreSummary"></p>
 
             <div class="disclaimer-line">
+              <strong>A real bank or government office will never ask you to share an OTP or PIN.</strong><br>
               Lure uses rules, not magic. Always verify with the official source.
             </div>
 
@@ -1451,12 +1496,12 @@
                 <span id="calcExpanderIcon">+</span>
               </button>
               <div class="expander-content" id="calcExpanderContent" hidden>
-                <p>Each rule carries a fixed point weight based on how strongly it correlates with social engineering or technical spoofing. The total is capped at 100.</p>
+                <p>Each rule carries a fixed point weight based on how strongly it correlates with social engineering or technical spoofing. Combo bonuses apply when multiple high-risk tactics co-occur. The total is capped at 100.</p>
                 <table class="calc-table">
                   <thead>
                     <tr>
                       <th>Rule / Signal</th>
-                      <th>Category</th>
+                      <th>Severity</th>
                       <th>Points</th>
                     </tr>
                   </thead>
@@ -1506,6 +1551,7 @@
       </div>
     </section>
 
+    <!-- Quiz View -->
     <section class="quiz-section" id="quizView" hidden aria-labelledby="quizHeadline">
       <div class="hero-header">
         <div class="hero-eyebrow">INTERACTIVE TRAINING // 6 ROUNDS</div>
@@ -1524,7 +1570,7 @@
         <div class="quiz-prompt-box" id="quizPromptBox"></div>
 
         <div class="quiz-btn-row" id="quizChoiceRow">
-          <button type="button" class="quiz-choice-btn" id="quizSafeBtn">Looks Safe</button>
+          <button type="button" class="quiz-choice-btn" id="quizSafeBtn">No Known Lure (Safe)</button>
           <button type="button" class="quiz-choice-btn" id="quizPhishBtn" style="border-color: var(--vermilion); color: var(--vermilion);">Phishing Lure</button>
         </div>
 
@@ -1537,8 +1583,33 @@
       </div>
     </section>
 
-    <!-- Self-Test Output Banner (#selftest) -->
-    <div class="selftest-banner" id="selftestBanner" hidden></div>
+    <!-- Self-Test Output Panel (#selftest) -->
+    <section class="selftest-panel" id="selftestPanel" hidden aria-labelledby="selftestTitle">
+      <div class="selftest-head">
+        <div>
+          <div class="input-label">AUTOMATED VERIFICATION SUITE (#selftest)</div>
+          <h2 class="selftest-title" id="selftestTitle">Engine Self-Test Results</h2>
+        </div>
+        <div id="selftestSummaryBadge" class="status-pill is-pass"></div>
+      </div>
+      <p id="selftestFailSummary" style="font-family: var(--font-mono); font-size: 0.8125rem; margin-bottom: 14px;"></p>
+      <div class="selftest-table-wrap">
+        <table class="selftest-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Test Case</th>
+              <th>Mode</th>
+              <th>Score</th>
+              <th>Expected</th>
+              <th>Verdict</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="selftestTableBody"></tbody>
+        </table>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer">
@@ -1560,17 +1631,16 @@
       /**
        * ============================================================================
        * 1. RULES & KNOWLEDGE BASE DATA OBJECT
-       * All detection rules, brand domains, TLDs, and samples live here at the top
-       * so new rules can be audited or added in one place.
+       * All brands, TLDs, shorteners, message rules, and test samples live here.
        * ============================================================================
        */
       const LURE_DATA = {
-        // 68 Popular Global & Indian Brands/Banks/Institutions with their official registrable domains
+        // 68 Popular Global & Indian Brands/Banks/Institutions with official registrable domains
         knownBrands: [
           { name: 'SBI / State Bank of India', tokens: ['sbi', 'onlinesbi', 'sbicard', 'statebankofindia', 'yonosbi'], domains: ['sbi.co.in', 'onlinesbi.sbi', 'sbicard.com', 'sbi.bank.in'] },
           { name: 'HDFC Bank', tokens: ['hdfc', 'hdfcbank', 'hdfclife'], domains: ['hdfcbank.com', 'hdfc.com', 'hdfclife.com'] },
           { name: 'ICICI Bank', tokens: ['icici', 'icicibank', 'icicidirect'], domains: ['icicibank.com', 'icicidirect.com'] },
-          { name: 'Axis Bank', tokens: ['axisbank', 'axisdirect'], domains: ['axisbank.com', 'axisdirect.in'] },
+          { name: 'Axis Bank', tokens: ['axisbank', 'axisdirect', 'axis'], domains: ['axisbank.com', 'axisdirect.in'] },
           { name: 'Kotak Mahindra Bank', tokens: ['kotak', 'kotakbank'], domains: ['kotak.com', 'kotakbank.com'] },
           { name: 'Punjab National Bank', tokens: ['pnb', 'pnbindia', 'netpnb'], domains: ['pnbindia.in', 'netpnb.com'] },
           { name: 'Bank of Baroda', tokens: ['bankofbaroda', 'bobibanking'], domains: ['bankofbaroda.in', 'bobibanking.com'] },
@@ -1581,7 +1651,7 @@
           { name: 'Union Bank of India', tokens: ['unionbankofindia'], domains: ['unionbankofindia.co.in'] },
           { name: 'Paytm', tokens: ['paytm', 'paytmbank'], domains: ['paytm.com', 'paytmbank.com'] },
           { name: 'PhonePe', tokens: ['phonepe'], domains: ['phonepe.com'] },
-          { name: 'Google Pay / Google', tokens: ['google', 'googlepay', 'gpay', 'gmail'], domains: ['google.com', 'google.co.in', 'gmail.com', 'withgoogle.com'] },
+          { name: 'Google / Google Pay', tokens: ['google', 'googlepay', 'gpay', 'gmail'], domains: ['google.com', 'google.co.in', 'gmail.com', 'withgoogle.com', 'docs.google.com', 'drive.google.com'] },
           { name: 'BharatPe', tokens: ['bharatpe'], domains: ['bharatpe.com'] },
           { name: 'Razorpay', tokens: ['razorpay'], domains: ['razorpay.com'] },
           { name: 'CRED', tokens: ['credclub'], domains: ['cred.club'] },
@@ -1589,14 +1659,15 @@
           { name: 'Groww', tokens: ['groww'], domains: ['groww.in'] },
           { name: 'Upstox', tokens: ['upstox'], domains: ['upstox.com'] },
           { name: 'UIDAI / Aadhaar', tokens: ['uidai', 'aadhaar', 'myaadhaar'], domains: ['uidai.gov.in'] },
-          { name: 'Income Tax India', tokens: ['incometax', 'incometaxindia'], domains: ['incometax.gov.in', 'incometaxindia.gov.in'] },
+          { name: 'Income Tax Department', tokens: ['incometax', 'incometaxindia', 'incometaxdept'], domains: ['incometax.gov.in', 'incometaxindia.gov.in'] },
           { name: 'Parivahan / eChallan', tokens: ['parivahan', 'echallan'], domains: ['parivahan.gov.in'] },
           { name: 'DigiLocker', tokens: ['digilocker'], domains: ['digilocker.gov.in'] },
           { name: 'EPFO', tokens: ['epfindia', 'epfo'], domains: ['epfindia.gov.in'] },
           { name: 'India Post', tokens: ['indiapost'], domains: ['indiapost.gov.in'] },
+          { name: 'JVVNL / Electricity Discom', tokens: ['jvvnl', 'bescom', 'uppcl', 'mahadiscom', 'tsspdcl'], domains: ['energy.rajasthan.gov.in', 'bescom.karnataka.gov.in', 'uppcl.org', 'mahadiscom.in'] },
           { name: 'IRCTC', tokens: ['irctc'], domains: ['irctc.co.in'] },
-          { name: 'NPCI /BHIM UPI', tokens: ['npci', 'bhimupi'], domains: ['npci.org.in', 'bhimupi.org.in'] },
-          { name: 'Reserve Bank of India', tokens: ['rbi', 'reservebankofindia'], domains: ['rbi.org.in'] },
+          { name: 'NPCI / BHIM UPI', tokens: ['npci', 'bhimupi'], domains: ['npci.org.in', 'bhimupi.org.in'] },
+          { name: 'Reserve Bank of India (RBI)', tokens: ['rbi', 'reservebankofindia'], domains: ['rbi.org.in'] },
           { name: 'Flipkart', tokens: ['flipkart'], domains: ['flipkart.com'] },
           { name: 'Amazon', tokens: ['amazon', 'amazonin', 'amzn'], domains: ['amazon.com', 'amazon.in', 'amzn.to', 'amzn.in'] },
           { name: 'Myntra', tokens: ['myntra'], domains: ['myntra.com'] },
@@ -1617,7 +1688,7 @@
           { name: 'Jio', tokens: ['jio', 'myjio'], domains: ['jio.com'] },
           { name: 'Airtel', tokens: ['airtel'], domains: ['airtel.in', 'airtel.com'] },
           { name: 'BSNL', tokens: ['bsnl'], domains: ['bsnl.co.in'] },
-          { name: 'Microsoft', tokens: ['microsoft', 'office365', 'outlook', 'onedrive'], domains: ['microsoft.com', 'office.com', 'live.com', 'outlook.com', '1drv.ms'] },
+          { name: 'Microsoft', tokens: ['microsoft', 'office365', 'outlook', 'onedrive', 'sharepoint'], domains: ['microsoft.com', 'office.com', 'live.com', 'outlook.com', 'sharepoint.com', '1drv.ms'] },
           { name: 'Apple', tokens: ['apple', 'icloud', 'appleid'], domains: ['apple.com', 'icloud.com'] },
           { name: 'Meta / Facebook', tokens: ['facebook', 'instagram', 'whatsapp', 'meta'], domains: ['facebook.com', 'instagram.com', 'whatsapp.com', 'meta.com', 'fb.com'] },
           { name: 'Netflix', tokens: ['netflix'], domains: ['netflix.com'] },
@@ -1630,24 +1701,29 @@
           { name: 'LinkedIn', tokens: ['linkedin'], domains: ['linkedin.com', 'lnkd.in'] },
           { name: 'GitHub', tokens: ['github'], domains: ['github.com', 'github.io'] },
           { name: 'Dropbox', tokens: ['dropbox'], domains: ['dropbox.com'] },
+          { name: 'Notion', tokens: ['notion'], domains: ['notion.so', 'notion.site'] },
           { name: 'Adobe', tokens: ['adobe'], domains: ['adobe.com'] },
           { name: 'Zoom', tokens: ['zoom'], domains: ['zoom.us', 'zoom.com'] },
-          { name: 'Slack', tokens: ['slack'], domains: ['slack.com'] },
-          { name: 'Steam', tokens: ['steampowered', 'steamcommunity'], domains: ['steampowered.com', 'steamcommunity.com'] },
-          { name: 'Discord', tokens: ['discord', 'discordapp'], domains: ['discord.com', 'discord.gg', 'discordapp.com'] }
+          { name: 'Slack', tokens: ['slack'], domains: ['slack.com'] }
         ],
 
-        // High-risk or commonly abused TLDs in phishing campaigns
-        suspiciousTlds: new Set([
-          'zip', 'mov', 'xyz', 'top', 'click', 'tk', 'ml', 'ga', 'cf', 'gq',
-          'work', 'loan', 'kim', 'country', 'stream', 'download', 'xin', 'gdn',
-          'racing', 'jetzt', 'vip', 'icu', 'buzz', 'rest', 'fit', 'sbs', 'cfd',
-          'quest', 'cyou', 'monster', 'shop', 'live', 'online', 'site', 'fun'
+        // Trusted cloud document-sharing registrable domains
+        trustedDocDomains: new Set([
+          'google.com', 'docs.google.com', 'drive.google.com',
+          'microsoft.com', 'office.com', 'live.com', 'sharepoint.com', '1drv.ms',
+          'dropbox.com', 'notion.so', 'notion.site'
         ]),
 
-        // Common URL shorteners that hide destination domains
+        // High-risk or commonly abused TLDs in phishing campaigns (25 pts)
+        suspiciousTlds: new Set([
+          'top', 'xyz', 'click', 'tk', 'ml', 'zip', 'loan', 'mov', 'ga', 'cf', 'gq',
+          'work', 'kim', 'country', 'stream', 'download', 'xin', 'gdn', 'racing',
+          'vip', 'icu', 'buzz', 'rest', 'fit', 'sbs', 'cfd', 'quest', 'cyou', 'monster', 'shop', 'live', 'online', 'site'
+        ]),
+
+        // Common URL shorteners that hide destination domains (25 pts)
         urlShorteners: new Set([
-          'bit.ly', 'tinyurl.com', 't.co', 'rb.gy', 'cutt.ly', 'is.gd', 'v.gd',
+          'bit.ly', 'tinyurl.com', 't.co', 'cutt.ly', 'rb.gy', 'is.gd', 'v.gd',
           'shorturl.at', 'tiny.cc', 'ow.ly', 'rebrand.ly', 'bl.ink', 'buff.ly', 's.id'
         ]),
 
@@ -1657,192 +1733,267 @@
           'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'co.jp', 'co.nz', 'co.za', 'com.br', 'com.sg'
         ]),
 
-        // Message Detection Rules (Weighted + Regex with /gi for exact span highlighting)
+        // Rebuilt Message Detection Rules (STEP 2 specifications)
         messageRules: [
           {
+            id: 'MSG_OTP_CREDENTIAL',
+            label: 'OTP or sensitive credential request',
+            points: 45,
+            severity: 'high',
+            excludeIfWarning: true,
+            explanation: 'Asks you to share, send, tell, or enter an OTP, PIN, CVV, password, PAN, or Aadhaar. Real banks and government offices never ask you to share an OTP or PIN.',
+            patterns: [
+              /\b(?:share|send|tell|read\s+out|give|forward|enter|submit|provide|input|reply\s+with)\s+(?:me\s+|us\s+)?(?:the\s+|your\s+|a\s+)?(?:[\w,]+\s+){0,5}?(?:otp|one[\s-]time\s+password|upi\s+pin|mpin|atm\s+pin|pin|cvv|password|card\s+number|net\s*banking\s+(?:password|details)|aadhaar(?:\s+copy|\s+number)?|pan(?:\s+card|\s+number)?)\b/gi,
+              /\b(?:otp|pin|cvv|password)\s+(?:you\s+just\s+received\s+)?(?:batao|bataiye|bhejo|bhejiye|share\s+karo|share\s+karein|send\s+karo|de\s+do|dijiye)\b/gi,
+              /\b(?:send|share|upload|submit)\s+(?:your\s+)?(?:aadhaar|pan)\s+(?:copy|card|details|number)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_CREDENTIAL_HARVEST',
+            label: 'Login or verification prompt to open link/file',
+            points: 20,
+            severity: 'caution',
+            explanation: 'Prompts you to sign in, log in, verify, or authenticate your email or bank account to view a document or claim funds—a classic credential harvesting setup.',
+            patterns: [
+              /\b(?:sign\s+in|log\s*in|authenticate)\s+(?:with\s+your\s+[\w\s]{1,25}?\s+)?(?:to\s+(?:open|view|access|continue|download)|here)\b/gi,
+              /\b(?:verify|confirm|authenticate)\s+your\s+(?:bank\s+account|account|email|identity|login\s+credentials)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_ACCOUNT_THREAT',
+            label: 'Account block, suspension, or penalty threat',
+            points: 30,
+            severity: 'high',
+            explanation: 'Threatens that your account, PAN, card, connection, or membership will be suspended, blocked, disconnected, closed, or fined to trigger panic.',
+            patterns: [
+              /\b(?:account|pan(?:\s+card)?|card|connection|electricity(?:\s+connection|\s+power)?|sim|membership|services?)\s+(?:has\s+been\s+|will\s+be\s+|is\s+)?(?:blocked|suspended|disconnected|deactivated|cancelled|restricted|frozen|terminated|closed|band\s+ho\s+jayega|band\s+kar\s+diya)\b/gi,
+              /\b(?:avoid\s+a?\s*penalty(?:\s+of\s+(?:rs\.?|inr|₹)?\s*[\d,]+)?|penalty\s+of\s+(?:rs\.?|inr|₹)?\s*[\d,]+|(?:rs\.?|inr|₹)\s*[\d,]+\s*charge\s+lagega|legal\s+action|will\s+be\s+closed|band\s+ho\s+jayega)\b/gi
+            ]
+          },
+          {
             id: 'MSG_URGENCY',
-            category: 'Urgency & Pressure',
-            title: 'Artificial time pressure or urgency',
-            weight: 18,
-            severity: 'medium',
-            explanation: 'Attackers manufacture panic so you act before verifying. Legitimate institutions rarely give 24-hour ultimatums via SMS or email links.',
+            label: 'Urgency and high-pressure deadline',
+            points: 15,
+            severity: 'caution',
+            explanation: 'Uses artificial countdowns or urgent commands ("within 24 hours", "tonight", "immediately", "abhi", "turant") so you act before verifying.',
             patterns: [
-              /\b(?:act\s+now|immediate(?:ly)?\s+action|within\s+\d+\s*(?:hours?|hrs?|minutes?|mins?)|expires?\s+(?:today|tonight|in\s+\d+\s*hours?)|urgent\s+(?:notice|attention|action|update)|final\s+(?:notice|warning|reminder)|last\s+chance|do\s+it\s+immediately|avoid\s+suspension)\b/gi
+              /\b(?:immediately|urgent(?:ly)?|tonight|aaj\s+raat|today\s+only|(?:within|in)\s+\d+\s*(?:hours?|hrs?|minutes?|mins?)|abhi(?:\s+ke\s+abhi)?|turant|jaldi(?:\s+karo)?|last\s+chance|final\s+(?:notice|warning)|act\s+now|action\s+required|(?:update|pay|verify|cancel\s+it)\s+(?:[\w\s]{0,15}?\s+)?now|(?:receive\s+the\s+money|reimburse\s+you)\s+today)\b/gi
             ]
           },
           {
-            id: 'MSG_THREATS',
-            category: 'Threats & Fear',
-            title: 'Account freeze, suspension, or legal threat',
-            weight: 22,
+            id: 'MSG_KYC_BAIT',
+            label: 'KYC, PAN, or Aadhaar update bait',
+            points: 30,
             severity: 'high',
-            explanation: 'Threatening account suspension, police action, or service disconnection is a classic manipulation tactic designed to bypass critical thinking.',
+            explanation: 'Lures you into clicking an external link under the pretext of an expired KYC, suspended PAN, or Aadhaar record mismatch.',
             patterns: [
-              /\b(?:account\s+(?:has\s+been\s+|will\s+be\s+)?(?:suspended|blocked|frozen|deactivated|restricted|locked|terminated)|legal\s+action|unauthorized\s+(?:login|access|transaction)|permanently\s+(?:closed|blocked)|police\s+complaint|cyber\s+warrant|service\s+will\s+be\s+disconnected)\b/gi
+              /\b(?:kyc\s+(?:update(?:\s+karo|\s+karein)?|expired|incomplete|pending|verification)|update\s+(?:your\s+)?(?:[\w]+\s+)?kyc|re[\s-]kyc|pan\s+card\s+(?:has\s+been\s+|is\s+)?suspended|mismatch\s+in\s+records|aadhaar\s+(?:update|mismatch)|account\s+verification\s+required)\b/gi
             ]
           },
           {
-            id: 'MSG_CREDENTIALS',
-            category: 'Credential Harvesting',
-            title: 'Request for OTP, PIN, password, or sensitive ID',
-            weight: 30,
+            id: 'MSG_REFUND_PRIZE',
+            label: 'Refund, cashback, lottery, or prize bait',
+            points: 30,
             severity: 'high',
-            explanation: 'No bank, UPI app, or government agency will ever ask you to reply with or enter your OTP, UPI PIN, CVV, full card number, or password via an external link.',
+            explanation: 'Promises an approved tax refund, lottery win, cashback, or prize to trick you into visiting a phishing link or approving a payment collect request.',
             patterns: [
-              /\b(?:(?:share|enter|verify|confirm|submit|provide|input)\s+(?:your\s+)?(?:otp|one[\s-]time\s+password|upi\s+pin|mpin|atm\s+pin|cvv|card\s+number|netbanking\s+password|login\s+credentials|aadhaar\s+number|pan\s+number)|otp\s+to\s+(?:verify|cancel|claim)|never\s+share\s+otp\s+unless)\b/gi,
-              /\b(?:upi\s+pin|cvv\s+code|6[\s-]digit\s+otp|4[\s-]digit\s+pin)\b/gi
+              /\b(?:refund\s+(?:of\s+(?:rs\.?|inr|₹)?\s*[\d,]+\s+)?(?:has\s+been\s+|is\s+)?approved|income\s+tax\s+refund|itr[\s-]refund|cashback\s+(?:of\s+|reward)|lottery\s+(?:winner|prize)|you\s+have\s+won|unclaimed\s+(?:prize|reward|refund)|claim\s+now|claim\s+your\s+(?:free|prize|refund|bonus|reward))\b/gi
             ]
           },
           {
-            id: 'MSG_MONEY_BAIT',
-            category: 'Money Bait',
-            title: 'Too-good-to-be-true prize, refund, or cashback lure',
-            weight: 22,
+            id: 'MSG_PAYMENT_FAILURE',
+            label: 'Payment declined or billing update bait',
+            points: 25,
             severity: 'high',
-            explanation: 'Promises of unexpected lottery winnings, tax refunds, crypto giveaways, or instant cashback lures are used to trick you into paying a fee or approving a UPI collect request.',
+            explanation: 'Claims a subscription or bill payment failed and demands you re-enter your credit/debit card details on an external page.',
             patterns: [
-              /\b(?:you\s+have\s+won|lucky\s+(?:draw|winner)|unclaimed\s+(?:reward|prize|refund)|crypto\s+giveaway|instant\s+cashback\s+of\s+(?:rs\.?|inr|₹)?\s*\d+|claim\s+your\s+(?:free|prize|refund|bonus|reward)|lottery\s+prize|income\s+tax\s+refund\s+approved)\b/gi
+              /\b(?:payment\s+(?:was\s+)?declined|could\s+not\s+process\s+your\s+(?:last\s+)?payment|card\s+expired|update\s+(?:your\s+)?card\s+details|membership\s+(?:will\s+be\s+)?cancelled|billing\s+problem)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_UTILITY_SCAM',
+            label: 'Utility or SIM disconnection scam',
+            points: 30,
+            severity: 'high',
+            explanation: 'Threatens that your electricity, gas, water, or SIM connection will be cut tonight unless you call a personal number or click an unverified bill link.',
+            patterns: [
+              /\b(?:electricity|power|gas|water|sim(?:\s+card)?)\s+(?:connection\s+|supply\s+)?(?:will\s+be\s+|is\s+being\s+)?(?:disconnected|cut|blocked|deactivated)(?:\s+tonight)?\b/gi,
+              /\b(?:previous\s+month\s+bill\s+(?:is|was)\s+not\s+updated|contact\s+(?:our\s+|electricity\s+)?officer)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_FAKE_JOB_FEE',
+            label: 'Fake job, WFH, or internship fee scam',
+            points: 35,
+            severity: 'high',
+            explanation: 'Offers a high-stipend internship or WFH job with "no interview" and demands a "refundable security deposit" or registration fee to confirm your seat.',
+            patterns: [
+              /\b(?:shortlisted\s+for\s+(?:a\s+|an\s+)?[\w\s]+?(?:internship|job)|no\s+interview|refundable\s+security\s+deposit|security\s+deposit\s+to\s+confirm\s+your\s+seat|registration\s+fee\s+to\s+confirm|stipend\s+(?:rs\.?|inr|₹)\s*[\d,]+|earn\s+(?:rs\.?|inr|₹)?\s*[\d,]+\s*(?:per\s+day|daily|\/day))\b/gi
+            ]
+          },
+          {
+            id: 'MSG_CEO_GIFTCARD',
+            label: 'Gift card or executive impersonation (CEO fraud)',
+            points: 40,
+            severity: 'high',
+            explanation: 'Impersonates a boss or colleague claiming to be stuck in a meeting and urgently asking you to buy gift cards and send the codes.',
+            patterns: [
+              /\b(?:i\s+am\s+in\s+a\s+meeting\s+and\s+cannot\s+talk|buy\s+(?:\d+\s+)?[\w\s]*?gift\s+cards?|send\s+me\s+the\s+codes|i\s+will\s+reimburse\s+you|reimburse\s+you\s+(?:later|today)|urgent\s+favou?r)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_UNEXPECTED_TXN',
+            label: 'Unexpected transaction alert with action bait',
+            points: 20,
+            severity: 'caution',
+            requiresSuspiciousContext: true,
+            explanation: 'Claims a large transaction is being processed ("If not done by you...") to panic you into sharing an OTP or clicking a fake cancellation link.',
+            patterns: [
+              /\b(?:payment\s+of\s+(?:rs\.?|inr|₹)\s*[\d,]+\s+is\s+being\s+processed|if\s+not\s+done\s+by\s+you|not\s+you\?|amount\s+debited)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_AUTHORITY',
+            label: 'Brand, bank, or authority name in a suspicious message',
+            points: 15,
+            severity: 'caution',
+            requiresOtherSignal: true,
+            explanation: 'Invokes a trusted bank, government department, or major brand alongside manipulation or spoofing signals to borrow credibility.',
+            patterns: [
+              /\b(?:sbi|state\s+bank\s+of\s+india|hdfc(?:\s+bank)?|icici(?:\s+bank)?|axis(?:\s+bank)?|kotak|pnb|rbi|reserve\s+bank|income\s+tax\s+(?:department|dept)|uidai|aadhaar|amazon|flipkart|netflix(?:\s+support)?|google|microsoft|apple|paypal|paytm|phonepe|india\s+post|jvvnl|credit\s+card\s+team|kyc\s+team|customer\s+care)\b/gi
             ]
           },
           {
             id: 'MSG_GENERIC_GREETING',
-            category: 'Generic Greeting',
-            title: 'Impersonal greeting ("Dear customer / user")',
-            weight: 10,
-            severity: 'medium',
-            explanation: 'Mass phishing campaigns often use generic greetings like "Dear Customer" or "Dear User" because they do not know your real registered name.',
+            label: 'Generic greeting instead of your name',
+            points: 10,
+            severity: 'caution',
+            explanation: 'Uses a mass-template salutation ("Dear Customer", "Dear Consumer", "Hi user", "Sir/Madam") rather than your registered full name.',
             patterns: [
-              /\b(?:dear\s+(?:valued\s+)?(?:customer|user|member|account\s+holder|client|beneficiary)|hello\s+dear\s+user)\b/gi
+              /\b(?:dear\s+(?:valued\s+)?(?:customer|consumer|user|member|account\s+holder|client|beneficiary)|hi\s+user|hello\s+dear\s+user|sir\/madam)\b/gi,
+              /(?:^|\n)\s*sir(?:\s*,|\s+aapka\b)/gi
             ]
           },
           {
-            id: 'MSG_INDIA_KYC_BANK',
-            category: 'Indian-Context Scam',
-            title: 'Fake Bank / PAN / Aadhaar KYC expiry lure',
-            weight: 26,
-            severity: 'high',
-            explanation: 'In India, scammers frequently send SMS claiming your SBI/HDFC/Paytm KYC or PAN-Aadhaar link has expired. Banks never ask you to update KYC via an SMS link or personal phone number.',
+            id: 'MSG_VAGUE_SENDER',
+            label: 'Vague institutional sign-off with a link',
+            points: 10,
+            severity: 'caution',
+            requiresLinkOrAttachment: true,
+            explanation: 'Signs off with a generic title like "Admin Office", "IT Team", or "HR Department" instead of a verifiable person while asking you to open a link.',
             patterns: [
-              /\b(?:kyc\s+(?:is\s+|has\s+)?(?:expired|incomplete|pending|update\s+immediately|verification\s+required)|update\s+(?:your\s+)?(?:pan|aadhaar|bank)\s+kyc|pan\s+card\s+(?:will\s+be\s+)?(?:blocked|inoperative)|complete\s+re[\s-]kyc)\b/gi
+              /\b(?:admin\s+office|it\s+team|support\s+team|hr\s+department|it\s+helpdesk|security\s+team)\b/gi
             ]
           },
           {
-            id: 'MSG_INDIA_ELECTRICITY',
-            category: 'Indian-Context Scam',
-            title: 'Electricity bill tonight-disconnection scam',
-            weight: 28,
-            severity: 'high',
-            explanation: 'A widespread Indian scam warns that your electricity power will be disconnected tonight at 9:30 PM because last month\'s bill wasn\'t updated, urging you to call a personal mobile number.',
+            id: 'MSG_PAST_CONVO',
+            label: 'Fake prior-conversation reference with link/attachment',
+            points: 10,
+            severity: 'caution',
+            requiresLinkOrAttachment: true,
+            explanation: 'Phrases like "as discussed in the meeting" or "as per our call" create false familiarity so you lower your guard and open an untrusted link.',
             patterns: [
-              /\b(?:electricity\s+(?:power\s+)?(?:will\s+be\s+)?disconnected\s+tonight|power\s+supply\s+will\s+be\s+cut|previous\s+month\s+bill\s+was\s+not\s+updated|contact\s+electricity\s+officer)\b/gi
+              /\b(?:as\s+discussed(?:\s+in\s+the\s+meeting)?|as\s+per\s+our\s+(?:call|discussion|conversation)|further\s+to\s+our\s+call)\b/gi
             ]
           },
           {
-            id: 'MSG_INDIA_COURIER',
-            category: 'Indian-Context Scam',
-            title: 'Fake India Post / Customs / Courier address fee',
-            weight: 25,
-            severity: 'high',
-            explanation: 'Scammers impersonate India Post, Delhivery, or Customs claiming a parcel is stuck due to an "incomplete address" or unpaid customs fee, directing you to a fake payment page.',
+            id: 'MSG_CONTACT_PHONE',
+            label: 'Pressure to call or WhatsApp an unverified number',
+            points: 10,
+            severity: 'caution',
+            explanation: 'Directs you to call or WhatsApp a personal mobile number ("contact our officer on 98...") where a scammer will try to socially engineer you live.',
             patterns: [
-              /\b(?:parcel\s+(?:has\s+been\s+|is\s+)?(?:held|on\s+hold|returned|detained)|incomplete\s+delivery\s+address|update\s+delivery\s+address\s+within|customs\s+(?:clearance|duty)\s+fee|india\s+post\s*:\s*your\s+package)\b/gi
+              /\b(?:contact\s+(?:our\s+|electricity\s+)?officer(?:\s+[\w.\s]{0,20})?\s+(?:on|at)\s+[+\d][\d\s\-xX]{6,14}|call\s+this\s+number\s+immediately|on\s+whatsapp\s+[+\d][\d\s\-xX]{6,14})\b/gi
             ]
           },
           {
-            id: 'MSG_INDIA_JOB_UPI',
-            category: 'Indian-Context Scam',
-            title: 'Part-time WFH / YouTube / Telegram task or UPI scam',
-            weight: 25,
-            severity: 'high',
-            explanation: 'Fake job scams offer easy daily payouts (₹3,000–₹8,000/day) for liking YouTube videos, rating Google Maps places, or joining Telegram VIP task groups before stealing deposits.',
+            id: 'MSG_SECRECY',
+            label: 'Secrecy or isolation request',
+            points: 15,
+            severity: 'caution',
+            explanation: 'Insists that you "keep this confidential" or "don\'t tell anyone" so you do not verify the request with a colleague or family member.',
             patterns: [
-              /\b(?:earn\s+(?:rs\.?|inr|₹)?\s*\d{3,6}\s*(?:per\s+day|daily|\/day)|part[\s-]time\s+work\s+from\s+home|like\s+youtube\s+videos|rate\s+google\s+maps|telegram\s+(?:receptionist|task|vip\s+group)|enter\s+upi\s+pin\s+to\s+receive)\b/gi
+              /\b(?:keep\s+this\s+(?:strictly\s+)?confidential|don'?t\s+tell\s+anyone|do\s+not\s+tell\s+anyone|keep\s+this\s+between\s+us)\b/gi
             ]
           },
           {
             id: 'MSG_RISKY_ATTACHMENT',
-            category: 'Malicious Attachment',
-            title: 'Reference to risky or executable attachment format',
-            weight: 26,
+            label: 'Dangerous or executable attachment extension',
+            points: 30,
             severity: 'high',
-            explanation: 'Attackers disguise malware or fake login forms inside .html, .zip, .iso, .exe, .scr, or double-extension files like "invoice.pdf.exe".',
+            explanation: 'References file types commonly used to deliver malware or local credential harvesters (.exe, .scr, .zip, .html, .iso, .js, or double extensions like .pdf.exe).',
             patterns: [
               /\b[\w-]+\.(?:pdf|doc|docx|xls|xlsx|jpg|png)\.(?:exe|scr|js|vbs|bat|cmd|html|htm|iso|zip)\b/gi,
               /\b(?:attached|open|download)\s+[\w\s-]{0,20}\.(?:exe|scr|iso|img|vbs|bat|js|html|htm|zip|rar)\b/gi,
               /\b[\w-]+\.(?:exe|scr|iso|vbs|bat|cmd)\b/gi
             ]
-          },
-          {
-            id: 'MSG_GRAMMAR_PUNCT',
-            category: 'Formatting Anomaly',
-            title: 'Excessive punctuation or high-pressure formatting',
-            weight: 10,
-            severity: 'medium',
-            explanation: 'Multiple exclamation marks (!!!), erratic symbol clusters, or forced phrases like "kindly do the needful immediately" often appear in scam templates.',
-            patterns: [
-              /[!]{2,}|\?[?!]{2,}|\${3,}/g,
-              /\b(?:kindly\s+do\s+the\s+needful\s+immediately|failure\s+to\s+do\s+so\s+will\s+result)\b/gi
-            ]
           }
         ],
 
-        // 10 Built-in Realistic Examples for instant testing
+        // Built-in Realistic Examples for "Try an example"
         examples: [
-          {
-            id: 'ex-sbi-kyc',
-            mode: 'message',
-            tag: 'SMS // India Bank Scam',
-            name: 'Fake SBI KYC Expiry SMS',
-            content: 'Dear Customer, Your SBI YONO Account will be suspended today within 24 hours as your PAN Card KYC is incomplete. Kindly update your KYC immediately at http://sbi-yono-kyc-update.xyz/login and enter your OTP to avoid account freeze!'
-          },
-          {
-            id: 'ex-indiapost',
-            mode: 'message',
-            tag: 'SMS // Courier Scam',
-            name: 'India Post Parcel Address Fee',
-            content: 'India Post: Your package #IN84920194 has arrived at the warehouse but cannot be delivered due to an incomplete delivery address. Please update delivery address within 12 hours and pay Rs. 25 re-shipping fee here: https://indiapost-tracking.top/parcel!!'
-          },
           {
             id: 'ex-electricity',
             mode: 'message',
             tag: 'SMS // Utility Scam',
             name: 'Electricity Disconnection Tonight',
-            content: 'Dear Consumer, Your Electricity power will be disconnected tonight at 9:30 PM from electricity office because your previous month bill was not updated. Please immediately contact electricity officer Mr. Sharma at 9800012345 or download bill_receipt.pdf.exe.'
+            content: 'Dear Consumer, your electricity connection will be disconnected tonight at 9:30 PM because your previous month bill is not updated. Immediately contact our officer on 98XXXXXX21 or pay at http://jvvnl-bill-update.top'
           },
           {
-            id: 'ex-job-telegram',
+            id: 'ex-pan-email',
             mode: 'message',
-            tag: 'WhatsApp // Job Scam',
-            name: 'Fake YouTube / Telegram WFH Job',
-            content: 'Hello Dear User! Part-time work from home opportunity with Amazon India. Simply like YouTube videos and earn ₹5000 per day easily! Claim your free Rs 150 joining bonus now by contacting our Telegram receptionist at http://bit.ly/wfh-task-bonus'
+            tag: 'Email // Tax & PAN Bait',
+            name: 'PAN Card Suspended Scam',
+            content: 'Subject: PAN Card Suspended - Action Required. Dear Customer, Your PAN card has been suspended due to a mismatch in records. Update your details within 24 hours to avoid a penalty of Rs 10,000. Click here: https://incometax-pan-verify.click/update Enter your PAN, Aadhaar and net banking password to continue. Income Tax Department'
           },
           {
-            id: 'ex-ms-reset',
+            id: 'ex-hinglish-kyc',
             mode: 'message',
-            tag: 'Email // Brand Spoof',
-            name: 'Microsoft 365 Password & Attachment Scam',
-            content: 'Dear User,\n\nWe detected an unauthorized login attempt on your Microsoft 365 account. Your account has been restricted. To prevent permanent closure, open the attached file invoice_security_check.pdf.html and confirm your login credentials within 2 hours.\n\nVerify here: http://microsoft.account-verify-portal.click/auth'
+            tag: 'SMS // Hinglish KYC Scam',
+            name: 'Hinglish HDFC KYC Expiry',
+            content: 'Sir aapka account band ho jayega aaj raat. Abhi KYC update karo is link par: http://hdfc-kyc-update.top. Nahi to Rs 500 charge lagega.'
           },
           {
-            id: 'ex-safe-message',
+            id: 'ex-otp-scam',
             mode: 'message',
-            tag: 'Email // Safe Message',
-            name: 'Legitimate Team Release Note (Safe)',
-            content: 'Hi Tanay,\n\nHere are the deployment notes for yesterday\'s frontend sprint. All unit tests passed on staging and the typography spacing fixes are live. Let me know if we should review the accessibility audit during tomorrow\'s 11:00 AM standup.\n\nThanks,\nRohan'
+            tag: 'SMS // OTP Harvesting',
+            name: 'Fake SBI Card Transaction OTP Bait',
+            content: 'Sir, this is from SBI Credit Card team. A payment of Rs 49,999 is being processed. If not done by you, share the OTP you just received to cancel it immediately.'
+          },
+          {
+            id: 'ex-internship',
+            mode: 'message',
+            tag: 'WhatsApp // Job Fee Scam',
+            name: 'Fake Google Internship Deposit',
+            content: 'Congratulations!! You are shortlisted for a Cybersecurity Internship at Google. Stipend Rs 40,000/month. No interview. Pay Rs 1,500 refundable security deposit to confirm your seat. Send your Aadhaar copy and a photo on WhatsApp 91XXXXXXXX.'
+          },
+          {
+            id: 'ex-calm-phish',
+            mode: 'message',
+            tag: 'Email // Calm Phishing',
+            name: 'Fake Admin Project Schedule Share',
+            content: 'Hello, as discussed in the meeting, please find the revised project schedule here: https://drive-share-docs.com/project-schedule. Sign in with your college email to open it. Regards, Admin Office'
+          },
+          {
+            id: 'ex-safe-bank',
+            mode: 'message',
+            tag: 'SMS // Legitimate Alert',
+            name: 'Authentic SBI Debit Alert (Safe)',
+            content: 'SBI: Rs 1,200 debited from A/c XX5521 on 21-10-26 at Swiggy. Not you? Call 1800-1234. Never share OTP, PIN or password with anyone.'
           },
           {
             id: 'ex-bad-url',
             mode: 'link',
-            tag: 'Link // Homoglyph & Brand Spoof',
-            name: 'Lookalike Microsoft / SBI Phishing Link',
-            content: 'http://sbi-online.rnicrosoft-support.xyz/kyc-verify/login?session=8923&token=confirm'
+            tag: 'Link // Lookalike Domain',
+            name: 'Lookalike PayPal Phishing Link',
+            content: 'http://paypa1-secure-login.xyz/verify'
           },
           {
             id: 'ex-safe-url',
             mode: 'link',
-            tag: 'Link // Legitimate URL',
-            name: 'Official SBI Portal Link (Safe)',
-            content: 'https://www.onlinesbi.sbi/sbijava/retail/html/faq.html'
+            tag: 'Link // Official Domain',
+            name: 'Official Amazon India Link (Safe)',
+            content: 'https://www.amazon.in'
           },
           {
             id: 'ex-bad-headers',
@@ -1859,22 +2010,6 @@
               'Subject: URGENT: Your HDFC Account is Blocked - Action Required',
               'Date: Wed, 21 Oct 2026 09:14:15 +0530'
             ].join('\n')
-          },
-          {
-            id: 'ex-safe-headers',
-            mode: 'headers',
-            tag: 'Headers // Authentic Sender',
-            name: 'Authenticated GitHub Notification Headers (Safe)',
-            content: [
-              'Return-Path: <noreply@github.com>',
-              'Received: from mx.google.com (mx.google.com [142.250.11.88]) by work.example.com with ESMTPS; Wed, 21 Oct 2026 08:30:10 +0530',
-              'Received: from out-21.smtp.github.com (out-21.smtp.github.com [192.30.252.204]) by mx.google.com with ESMTPS; Wed, 21 Oct 2026 08:30:08 +0530',
-              'Authentication-Results: mx.google.com; spf=pass (google.com: domain of noreply@github.com designates 192.30.252.204 as permitted sender) smtp.mailfrom=noreply@github.com; dkim=pass header.i=@github.com; dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=github.com',
-              'From: "GitHub" <noreply@github.com>',
-              'Reply-To: "GitHub" <noreply@github.com>',
-              'Subject: [lure-app] Pull request #14 merged',
-              'Date: Wed, 21 Oct 2026 08:30:05 +0530'
-            ].join('\n')
           }
         ],
 
@@ -1883,59 +2018,114 @@
           {
             mode: 'message',
             isPhishing: true,
-            prompt: 'Dear Customer, Your HDFC Bank NetBanking will be blocked today because your PAN KYC is expired. Click http://hdfcbank-rekyc.xyz/update immediately and enter OTP to keep your account active.',
-            explanation: 'Classic Indian bank KYC lure: combines a generic greeting ("Dear Customer"), artificial 24-hour urgency, account-block threat, OTP harvesting, and a fake ".xyz" domain pretending to be HDFC Bank.'
+            prompt: 'Sir aapka account band ho jayega aaj raat. Abhi KYC update karo is link par: http://hdfc-kyc-update.top. Nahi to Rs 500 charge lagega.',
+            explanation: 'Hinglish KYC scam combining an account closure threat ("band ho jayega"), penalty threat ("Rs 500 charge lagega"), urgency ("aaj raat", "Abhi"), and a fake ".top" domain.'
           },
           {
             mode: 'link',
             isPhishing: true,
-            prompt: 'https://paytm-cashback.secure-claim-portal.top/verify?upi=true',
-            explanation: 'Although "paytm" appears at the beginning, it is only a subdomain. The actual registrable domain is "secure-claim-portal.top" on an abused ".top" TLD.'
+            prompt: 'http://sbi.co.in.account-verify.top/login',
+            explanation: 'Subdomain trap: "sbi.co.in" is placed in the subdomain, while the real registrable domain is "account-verify.top" on an abused ".top" TLD over unencrypted HTTP.'
           },
           {
             mode: 'message',
             isPhishing: false,
-            prompt: 'Your Blue Dart shipment #BD904182 is out for delivery today with our courier executive. No online payment or link click is required. Please keep your doorstep delivery code ready if applicable.',
-            explanation: 'This notification does not include any suspicious links, does not demand an extra address fee, and does not create panic or ask for financial credentials.'
+            prompt: 'SBI: Rs 1,200 debited from A/c XX5521 on 21-10-26 at Swiggy. Not you? Call 1800-1234. Never share OTP, PIN or password with anyone.',
+            explanation: 'Legitimate bank transaction alert: uses an official toll-free helpline (1800-1234), contains no suspicious link, and explicitly warns you NEVER to share your OTP, PIN, or password.'
           },
           {
             mode: 'message',
             isPhishing: true,
-            prompt: 'Congratulations! You have won a Cashback Reward of ₹4,999 on PhonePe! Open your app and enter your 4-digit UPI PIN on the collect request to receive ₹4,999 directly in your bank account.',
-            explanation: 'UPI Collect Scam: You NEVER need to enter your UPI PIN to receive money. Entering your UPI PIN only authorizes money leaving your bank account.'
+            prompt: 'Hi, I am in a meeting and cannot talk. I need you to urgently buy 5 Amazon gift cards of Rs 5,000 each and send me the codes here. I will reimburse you today. Keep this confidential.',
+            explanation: 'Classic CEO / Gift Card fraud: isolates you ("in a meeting and cannot talk", "Keep this confidential") and pressures you into sending irreversible gift card codes.'
           },
           {
             mode: 'link',
             isPhishing: false,
-            prompt: 'https://uidai.gov.in/en/my-aadhaar/about-your-aadhaar.html',
-            explanation: 'This URL uses encrypted HTTPS and its real registrable domain is "uidai.gov.in", the official Indian government domain for Aadhaar.'
+            prompt: 'https://www.amazon.in',
+            explanation: 'Uses encrypted HTTPS and its real registrable domain is "amazon.in", the official Indian domain for Amazon.'
           },
           {
             mode: 'message',
             isPhishing: true,
-            prompt: 'Dear User, Please find attached your overdue GST tax challan in GST_Invoice_Oct.pdf.exe. Failure to remit within 24 hours will result in legal action!!',
-            explanation: 'Uses a dangerous double extension (".pdf.exe") designed to run malware on Windows while pretending to be a PDF, paired with legal threats and excessive punctuation.'
+            prompt: 'Hello, as discussed in the meeting, please find the revised project schedule here: https://drive-share-docs.com/project-schedule. Sign in with your college email to open it. Regards, Admin Office',
+            explanation: 'Calm phishing: uses zero-panic office language ("as discussed in the meeting", "Admin Office") to lure you into entering your college email password on an untrusted document-sharing domain ("drive-share-docs.com").'
           }
         ]
       };
 
       /**
        * ============================================================================
-       * 2. TOKENIZER, STRING UTILITIES & TYPOSQUATTING COMPARATOR
+       * 2. OFFSET-PRESERVING NORMALIZER & STRING UTILITIES
+       * Strips zero-width characters, collapses whitespace, lowercases text, and
+       * maps lookalike characters (0/o, 1/l/i, @/a, $/s) while keeping an exact
+       * character offset map back to the original raw string.
        * ============================================================================
        */
-      function escapeHtml(raw) {
-        const str = String(raw ?? '');
-        return str
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
+      function normalizeTextWithOffsetMap(rawText) {
+        const raw = String(rawText || '');
+        const normChars = [];
+        const lookalikeChars = [];
+        const offsetMap = []; // Each index in normText maps to { start, end } in rawText
+
+        const zeroWidthRegex = /[\u200B-\u200D\uFEFF\u00AD\u2060]/;
+        const lookalikeCharMap = {
+          '0': 'o',
+          '1': 'i',
+          'l': 'i',
+          '!': 'i',
+          '@': 'a',
+          '$': 's'
+        };
+
+        for (let i = 0; i < raw.length; i++) {
+          const ch = raw[i];
+          if (zeroWidthRegex.test(ch)) {
+            continue;
+          }
+          if (/\s/.test(ch)) {
+            if (normChars.length > 0 && normChars[normChars.length - 1] === ' ') {
+              offsetMap[offsetMap.length - 1].end = i + 1;
+            } else {
+              normChars.push(' ');
+              lookalikeChars.push(' ');
+              offsetMap.push({ start: i, end: i + 1 });
+            }
+          } else {
+            const lower = ch.toLowerCase();
+            normChars.push(lower);
+            // Map lookalike character if adjacent to letters (so "netfl1x" or "p@ssw0rd" normalizes, while "Rs 500" stays numbers)
+            const prevRaw = i > 0 ? raw[i - 1] : '';
+            const nextRaw = i + 1 < raw.length ? raw[i + 1] : '';
+            const adjLetter = /[a-zA-Z]/.test(prevRaw) || /[a-zA-Z]/.test(nextRaw);
+            const mapped = (adjLetter && lookalikeCharMap[lower]) ? lookalikeCharMap[lower] : lower;
+            lookalikeChars.push(mapped);
+            offsetMap.push({ start: i, end: i + 1 });
+          }
+        }
+
+        return {
+          raw,
+          normText: normChars.join(''),
+          lookalikeText: lookalikeChars.join(''),
+          offsetMap
+        };
       }
 
-      // Homoglyph skeleton normalizer for common lookalike character swaps
-      function normalizeLookalikes(str) {
+      function mapNormSpanToRaw(offsetMap, normStart, normEnd, rawLength) {
+        if (!offsetMap || offsetMap.length === 0) {
+          return { start: 0, end: 0 };
+        }
+        const safeStart = Math.max(0, Math.min(normStart, offsetMap.length - 1));
+        const safeEnd = Math.max(safeStart, Math.min(normEnd - 1, offsetMap.length - 1));
+        return {
+          start: offsetMap[safeStart].start,
+          end: Math.min(rawLength, offsetMap[safeEnd].end)
+        };
+      }
+
+      // Homoglyph skeleton normalizer for domain lookalike comparisons (rn/m, vv/w, 0/o, 1/l/i, @/a, $/s)
+      function normalizeDomainLookalikes(str) {
         return String(str || '')
           .toLowerCase()
           .replace(/rn/g, 'm')
@@ -1965,9 +2155,9 @@
           for (let j = 1; j <= n; j++) {
             const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
             dp[i][j] = Math.min(
-              dp[i - 1][j] + 1,      // deletion
-              dp[i][j - 1] + 1,      // insertion
-              dp[i - 1][j - 1] + cost // substitution
+              dp[i - 1][j] + 1,
+              dp[i][j - 1] + 1,
+              dp[i - 1][j - 1] + cost
             );
           }
         }
@@ -1976,9 +2166,8 @@
 
       // Extracts the registrable domain (e.g. "onlinesbi.sbi" or "sbi.co.in") from a hostname
       function getRegistrableDomain(hostname) {
-        const cleanHost = String(hostname || '').toLowerCase().replace(/\.$/, '');
+        const cleanHost = String(hostname || '').toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
         if (!cleanHost) return '';
-        // Check if IPv4 or IPv6
         if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(cleanHost) || cleanHost.includes(':')) {
           return cleanHost;
         }
@@ -2003,12 +2192,21 @@
       /**
        * ============================================================================
        * 3. URL ANALYZER MODULE
-       * Inspects structure, IP usage, @ trick, Punycode/IDN, typosquatting,
-       * subdomain brand traps, suspicious TLDs, shorteners, and HTTP vs HTTPS.
+       * Evaluates all link signals with the exact STEP 2 weights:
+       * - Suspicious TLD: 25 (high)
+       * - URL shortener: 25 (caution)
+       * - Lookalike brand: 35 (high)
+       * - Brand name inside non-official domain: 30 (high)
+       * - Hyphen-stuffed / bait-keyword domain: 20 (caution)
+       * - Untrusted document-sharing domain: 15 (caution)
+       * - IP address as host: 35 (high)
+       * - "@" trick: 35 (high)
+       * - Punycode / IDN homograph: 35 (high)
+       * - http without https: 10 (caution)
        * ============================================================================
        */
       function analyzeUrlInput(rawInput) {
-        const trimmed = String(rawInput || '').trim();
+        const trimmed = String(rawInput || '').trim().replace(/[.,!?;:)]+$/, '');
         const signals = [];
         const defanged = defangUrl(trimmed);
 
@@ -2023,14 +2221,9 @@
           };
         }
 
-        // Check for @ trick in authority before URL parsing normalizes it
         const hasAtSymbolInAuthority = /^(?:https?:\/\/)?[^/?#]+@[^/?#]+/i.test(trimmed);
-
-        let urlToParse = trimmed;
-        let hadExplicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
-        if (!hadExplicitScheme) {
-          urlToParse = 'http://' + trimmed;
-        }
+        const hadExplicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+        const urlToParse = hadExplicitScheme ? trimmed : 'https://' + trimmed;
 
         let parsed;
         try {
@@ -2041,7 +2234,7 @@
             category: 'URL Structure',
             title: 'Malformed or unparseable URL syntax',
             weight: 20,
-            severity: 'medium',
+            severity: 'caution',
             explanation: 'This string could not be parsed as a standard web address. Attackers sometimes obfuscate URLs with unusual formatting.',
             snippet: trimmed.slice(0, 80)
           });
@@ -2055,213 +2248,202 @@
           };
         }
 
-        const protocol = hadExplicitScheme ? parsed.protocol.replace(':', '').toLowerCase() : '(missing — defaults to http)';
-        const hostname = parsed.hostname.toLowerCase();
-        const registrableDomain = getRegistrableDomain(hostname);
-        const tld = hostname.includes('.') ? hostname.split('.').pop() : '';
-        const subdomainPart = hostname.endsWith(registrableDomain) && hostname.length > registrableDomain.length
-          ? hostname.slice(0, hostname.length - registrableDomain.length - 1)
+        const rawHostname = parsed.hostname.toLowerCase();
+        const cleanHostname = rawHostname.replace(/^www\./, '');
+        const registrableDomain = getRegistrableDomain(cleanHostname);
+        const tld = cleanHostname.includes('.') ? cleanHostname.split('.').pop() : '';
+        const subdomainPart = cleanHostname.endsWith(registrableDomain) && cleanHostname.length > registrableDomain.length
+          ? cleanHostname.slice(0, cleanHostname.length - registrableDomain.length - 1)
           : '';
 
+        const protocolDisplay = hadExplicitScheme
+          ? parsed.protocol.replace(':', '').toLowerCase()
+          : '(scheme omitted)';
+
         const anatomy = {
-          protocol,
+          protocol: protocolDisplay,
           subdomains: subdomainPart || '(none)',
-          registrableDomain: registrableDomain || hostname,
+          registrableDomain: registrableDomain || cleanHostname,
           path: parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '/',
           query: parsed.search ? parsed.search : '(none)'
         };
 
-        // 1. Raw IP address instead of domain name
-        const isIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname);
-        const isIpv6 = hostname.startsWith('[') || hostname.includes(':');
-        if (isIpv4 || isIpv6) {
-          signals.push({
-            id: 'URL_RAW_IP',
-            category: 'Host Identity',
-            title: 'Uses raw IP address instead of a domain name',
-            weight: 35,
-            severity: 'high',
-            explanation: 'Legitimate consumer banks and services almost never send you to a raw numeric IP address (like 192.0.2.1) to log in.',
-            snippet: hostname
-          });
-        }
-
-        // 2. "@" symbol credential trick in URL authority
-        if (hasAtSymbolInAuthority || parsed.username || parsed.password) {
-          signals.push({
-            id: 'URL_AT_TRICK',
-            category: 'URL Obfuscation',
-            title: 'Contains "@" authority redirection trick',
-            weight: 38,
-            severity: 'high',
-            explanation: 'Everything before the "@" symbol in a URL is treated as a username and ignored for routing. For example, "https://google.com@evil.xyz" actually opens "evil.xyz".',
-            snippet: trimmed.slice(0, 90)
-          });
-        }
-
-        // 3. Punycode / IDN Homograph (xn--) or non-ASCII mixed script in raw input
-        const hasNonAsciiHost = /[^\x00-\x7F]/.test(trimmed.split('/')[2] || trimmed);
-        if (hostname.includes('xn--') || hasNonAsciiHost) {
-          signals.push({
-            id: 'URL_PUNYCODE_HOMOGRAPH',
-            category: 'IDN Homograph',
-            title: 'Punycode (xn--) or international lookalike characters detected',
-            weight: 35,
-            severity: 'high',
-            explanation: 'Attackers register domains with Cyrillic or Greek letters that look identical to Latin letters (e.g. "аpple.com"), encoded under the hood with "xn--".',
-            snippet: hostname
-          });
-        }
-
-        // 4. URL Shortener detection
-        if (LURE_DATA.urlShorteners.has(registrableDomain)) {
-          signals.push({
-            id: 'URL_SHORTENER',
-            category: 'Hidden Destination',
-            title: `Uses a URL shortener (${registrableDomain})`,
-            weight: 22,
-            severity: 'medium',
-            explanation: 'URL shorteners hide the true destination domain until after you click. Official security alerts from banks rarely mask their domain behind public shorteners.',
-            snippet: registrableDomain
-          });
-        }
-
-        // 5. Suspicious / commonly abused TLD
-        if (LURE_DATA.suspiciousTlds.has(tld)) {
-          signals.push({
-            id: 'URL_SUSPICIOUS_TLD',
-            category: 'Domain Extension',
-            title: `Uses high-risk or frequently abused TLD (.${tld})`,
-            weight: 22,
-            severity: 'high',
-            explanation: `Top-level domains like .${tld} are inexpensive or misleading (for instance, .zip looks like a file extension) and are heavily favored by short-lived phishing kits.`,
-            snippet: '.' + tld
-          });
-        }
-
-        // 6. Typosquatting & Brand-in-Subdomain/Path Analysis against 65+ Brands
-        const sldLabel = registrableDomain.split('.')[0] || '';
-        const sldClean = sldLabel.replace(/-/g, '');
-        const sldSkeleton = normalizeLookalikes(sldClean);
-
+        // Check if this domain belongs to an official brand
         let matchedOfficialBrand = null;
         for (const brand of LURE_DATA.knownBrands) {
-          if (brand.domains.includes(registrableDomain)) {
+          if (brand.domains.includes(registrableDomain) || brand.domains.includes(cleanHostname)) {
             matchedOfficialBrand = brand;
             break;
           }
         }
 
-        if (!matchedOfficialBrand && !isIpv4 && !isIpv6) {
-          let typoFound = false;
-          let brandInSubOrPathFound = false;
+        // 1. Raw IP address as host (35 pts, high)
+        const isIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(cleanHostname);
+        const isIpv6 = cleanHostname.startsWith('[') || cleanHostname.includes(':');
+        if (isIpv4 || isIpv6) {
+          signals.push({
+            id: 'URL_RAW_IP',
+            category: 'Link Signal',
+            title: 'IP address used as host instead of a domain name',
+            weight: 35,
+            severity: 'high',
+            explanation: 'Legitimate consumer banks and services almost never send you to a raw numeric IP address (like 192.0.2.1) to log in.',
+            snippet: cleanHostname
+          });
+        }
+
+        // 2. "@" credential redirection trick (35 pts, high)
+        if (hasAtSymbolInAuthority || parsed.username || parsed.password) {
+          signals.push({
+            id: 'URL_AT_TRICK',
+            category: 'Link Signal',
+            title: 'Contains "@" authority redirection trick',
+            weight: 35,
+            severity: 'high',
+            explanation: 'Everything before the "@" symbol in a URL is treated as a username and ignored for routing. For example, "https://sbi.co.in@evil.top" actually opens "evil.top".',
+            snippet: trimmed.slice(0, 90)
+          });
+        }
+
+        // 3. Punycode / IDN Homograph (35 pts, high)
+        const hasNonAsciiHost = /[^\x00-\x7F]/.test(trimmed.split('/')[2] || trimmed);
+        if (cleanHostname.includes('xn--') || hasNonAsciiHost) {
+          signals.push({
+            id: 'URL_PUNYCODE',
+            category: 'Link Signal',
+            title: 'Punycode (xn--) or mixed-script lookalike characters',
+            weight: 35,
+            severity: 'high',
+            explanation: 'Attackers register domains with Cyrillic or Greek letters that look identical to Latin letters, encoded under the hood with "xn--".',
+            snippet: cleanHostname
+          });
+        }
+
+        // 4. URL Shortener (25 pts, caution)
+        if (LURE_DATA.urlShorteners.has(registrableDomain)) {
+          signals.push({
+            id: 'URL_SHORTENER',
+            category: 'Link Signal',
+            title: `Uses a URL shortener (${registrableDomain}) that hides the destination`,
+            weight: 25,
+            severity: 'caution',
+            explanation: 'URL shorteners mask the true destination domain until after you click. Official banks and tax agencies do not hide verification portals behind public shorteners.',
+            snippet: trimmed
+          });
+        }
+
+        // 5. Suspicious TLD (25 pts, high)
+        if (LURE_DATA.suspiciousTlds.has(tld)) {
+          signals.push({
+            id: 'URL_SUSPICIOUS_TLD',
+            category: 'Link Signal',
+            title: `Suspicious or frequently abused top-level domain (.${tld})`,
+            weight: 25,
+            severity: 'high',
+            explanation: `Top-level domains like .${tld} are heavily abused by disposable phishing kits because they cost pennies to register in bulk.`,
+            snippet: '.' + tld
+          });
+        }
+
+        // 6. Lookalike Brand (35 pts, high) & Brand Name Inside Non-Official Domain (30 pts, high)
+        if (!matchedOfficialBrand && !LURE_DATA.urlShorteners.has(registrableDomain) && !isIpv4 && !isIpv6) {
+          const sldLabel = registrableDomain.split('.')[0] || '';
+          const hostTokens = cleanHostname.split(/[.-]/).filter(Boolean);
+          let lookalikeMatched = null;
+          let brandContainedMatched = null;
 
           for (const brand of LURE_DATA.knownBrands) {
             for (const token of brand.tokens) {
-              const tokenSkeleton = normalizeLookalikes(token);
+              if (token.length < 3) continue;
+              const tokenSkel = normalizeDomainLookalikes(token);
 
-              // A) Check if SLD is a lookalike / typosquat of a known brand token
-              if (!typoFound && token.length >= 4 && sldClean.length >= 3) {
-                const rawDist = levenshteinDistance(sldClean, token);
-                const skelDist = levenshteinDistance(sldSkeleton, tokenSkeleton);
+              // Check each host segment for character swaps / Levenshtein distance 1 (e.g., netfl1x, paypa1, rnicrosoft)
+              for (const seg of hostTokens) {
+                if (seg.length < 3) continue;
+                const segSkel = normalizeDomainLookalikes(seg);
+                const rawDist = levenshteinDistance(seg, token);
+                const isHomoglyphSwap = (seg !== token && segSkel === tokenSkel && token.length >= 4);
+                const isOneCharTypo = (seg !== token && token.length >= 5 && Math.abs(seg.length - token.length) <= 1 && rawDist === 1);
 
-                // Exact skeleton match with lookalike swap (e.g., rnicrosoft vs microsoft)
-                const isLookalikeSwap = (sldClean !== token && sldSkeleton === tokenSkeleton);
-                // 1-character typo on >= 5 char brand (e.g., paypaI, flipkrt, hdfcbnk)
-                const isCloseEdit = (token.length >= 5 && rawDist === 1);
-                // Domain contains exact brand + extra bait word (e.g., sbi-kyc.com or hdfcbank-verify.in)
-                const isHyphenCombo = (sldLabel !== token && (sldLabel.startsWith(token + '-') || sldLabel.endsWith('-' + token) || (token.length >= 5 && sldClean.includes(token))));
-
-                if (isLookalikeSwap || isCloseEdit || isHyphenCombo) {
-                  typoFound = true;
-                  signals.push({
-                    id: 'URL_TYPOSQUAT',
-                    category: 'Brand Impersonation',
-                    title: `Deceptive domain resembling ${brand.name}`,
-                    weight: 42,
-                    severity: 'high',
-                    explanation: `The registrable domain "${registrableDomain}" closely mimics ${brand.name} (official: ${brand.domains[0]}) using lookalike characters, a 1-letter typo, or added keywords.`,
-                    snippet: registrableDomain
-                  });
+                if (isHomoglyphSwap || isOneCharTypo) {
+                  lookalikeMatched = { brand, seg, token };
                   break;
                 }
               }
+              if (lookalikeMatched) break;
 
-              // B) Check if brand name appears in subdomain or path while real domain is unrelated
-              const fullSubAndPath = (subdomainPart + ' ' + parsed.pathname).toLowerCase();
-              const SubPathNormalized = normalizeLookalikes(subdomainPart);
-              if (
-                !brandInSubOrPathFound &&
-                (fullSubAndPath.includes(token) || (token.length >= 5 && SubPathNormalized.includes(tokenSkeleton)))
-              ) {
-                brandInSubOrPathFound = true;
-                signals.push({
-                  id: 'URL_BRAND_IN_SUBDOMAIN',
-                  category: 'Subdomain Trap',
-                  title: `${brand.name} appears in subdomain/path, not the real domain`,
-                  weight: 40,
-                  severity: 'high',
-                  explanation: `This link puts "${token}" in the subdomain or path to look trustworthy, but the actual website controlling it is "${registrableDomain}" (not ${brand.domains[0]}).`,
-                  snippet: hostname + parsed.pathname
-                });
-                break;
+              // Check if exact brand name is embedded inside a non-official domain/subdomain (e.g., sbi.co.in.account-verify.top, hdfc-kyc-update.top, incometax-pan-verify.click)
+              const sldClean = sldLabel.replace(/-/g, '');
+              const inHostWords = hostTokens.includes(token) || (token.length >= 5 && sldClean.includes(token));
+              if (inHostWords) {
+                brandContainedMatched = { brand, token };
               }
             }
+            if (lookalikeMatched) break;
+          }
+
+          if (lookalikeMatched) {
+            signals.push({
+              id: 'URL_LOOKALIKE_BRAND',
+              category: 'Link Signal',
+              title: `Lookalike brand spelling "${lookalikeMatched.seg}" mimicking ${lookalikeMatched.brand.name}`,
+              weight: 35,
+              severity: 'high',
+              explanation: `The domain "${cleanHostname}" uses a character swap or 1-letter typo ("${lookalikeMatched.seg}") to impersonate ${lookalikeMatched.brand.name} (official domain: ${lookalikeMatched.brand.domains[0]}).`,
+              snippet: cleanHostname
+            });
+          } else if (brandContainedMatched) {
+            signals.push({
+              id: 'URL_BRAND_MISMATCH',
+              category: 'Link Signal',
+              title: `Contains "${brandContainedMatched.brand.name}" inside an unofficial domain (${registrableDomain})`,
+              weight: 30,
+              severity: 'high',
+              explanation: `This link includes "${brandContainedMatched.token}" in the hostname to appear trustworthy, but the actual registrable domain is "${registrableDomain}" rather than ${brandContainedMatched.brand.domains[0]}.`,
+              snippet: cleanHostname
+            });
           }
         }
 
-        // 7. Excessive subdomains or hyphen stuffing
-        const subdomainCount = subdomainPart ? subdomainPart.split('.').filter(Boolean).length : 0;
-        if (subdomainCount >= 3) {
+        // 7. Untrusted Document-Sharing Domain (15 pts, caution)
+        const isTrustedDocDomain = LURE_DATA.trustedDocDomains.has(registrableDomain) || LURE_DATA.trustedDocDomains.has(cleanHostname);
+        const looksLikeDocShare = /\b(?:drive|docs?|share|files?|folder|schedule|workspace)\b/i.test(cleanHostname.replace(/[.-]/g, ' '));
+        if (!matchedOfficialBrand && !isTrustedDocDomain && looksLikeDocShare) {
           signals.push({
-            id: 'URL_EXCESSIVE_SUBDOMAINS',
-            category: 'URL Structure',
-            title: `Excessive subdomain depth (${subdomainCount} levels)`,
-            weight: 16,
-            severity: 'medium',
-            explanation: 'Chaining many subdomains (e.g. login.secure.verify.account.example.com) is often used to push the real domain out of view on mobile screens.',
-            snippet: hostname
-          });
-        }
-
-        const hyphenCount = (hostname.match(/-/g) || []).length;
-        if (hyphenCount >= 2) {
-          signals.push({
-            id: 'URL_HYPHEN_STUFFING',
-            category: 'URL Structure',
-            title: `Multiple hyphens in hostname (${hyphenCount} hyphens)`,
+            id: 'URL_UNTRUSTED_DOC_SHARE',
+            category: 'Link Signal',
+            title: `Document-sharing domain (${registrableDomain}) is not an official cloud provider`,
             weight: 15,
-            severity: 'medium',
-            explanation: 'Phishing domains frequently string together keywords with multiple hyphens (like "sbi-kyc-update-online.com"), whereas established institutions use concise domains.',
-            snippet: hostname
+            severity: 'caution',
+            explanation: `"${registrableDomain}" imitates a file or document-sharing portal, but it is not an official Google Drive, Microsoft OneDrive/SharePoint, Dropbox, or Notion domain.`,
+            snippet: registrableDomain
           });
         }
 
-        // 8. Very long URL
-        if (trimmed.length > 95) {
+        // 8. Hyphen-stuffed or bait-keyword domain (20 pts, caution)
+        const hyphenCount = (cleanHostname.match(/-/g) || []).length;
+        const hasBaitKeywords = /\b(?:verify|update|secure|login|signin|kyc|bill|billing|refund|account|confirm|portal)\b/i.test(cleanHostname.replace(/[.-]/g, ' '));
+        if (!matchedOfficialBrand && !LURE_DATA.urlShorteners.has(registrableDomain) && (hyphenCount >= 3 || (hyphenCount >= 1 && hasBaitKeywords))) {
           signals.push({
-            id: 'URL_VERY_LONG',
-            category: 'URL Structure',
-            title: `Unusually long URL (${trimmed.length} characters)`,
-            weight: 10,
-            severity: 'medium',
-            explanation: 'Long URLs can conceal redirects, encoded tracking identifiers, or fake login parameters.',
-            snippet: trimmed.slice(0, 65) + '...'
+            id: 'URL_HYPHEN_BAIT',
+            category: 'Link Signal',
+            title: `Hyphen-stuffed or bait-keyword domain (${cleanHostname})`,
+            weight: 20,
+            severity: 'caution',
+            explanation: 'Phishing domains routinely combine hyphens with action words like "verify", "update", "secure", "login", "kyc", "bill", or "refund" because the real brand domain is already taken.',
+            snippet: cleanHostname
           });
         }
 
-        // 9. Unencrypted HTTP on sensitive path/domain
-        const hasSensitiveKeywords = /(?:login|signin|verify|kyc|update|password|bank|secure|account|upi|wallet|confirm)/i.test(trimmed);
-        if (parsed.protocol === 'http:') {
+        // 9. HTTP without HTTPS (10 pts, caution)
+        if (hadExplicitScheme && parsed.protocol === 'http:') {
           signals.push({
             id: 'URL_INSECURE_HTTP',
-            category: 'Transport Security',
-            title: hasSensitiveKeywords
-              ? 'Unencrypted HTTP used on a login/verification link'
-              : 'Uses unencrypted HTTP instead of HTTPS',
-            weight: hasSensitiveKeywords ? 24 : 12,
-            severity: hasSensitiveKeywords ? 'high' : 'medium',
-            explanation: 'Plain HTTP transmits data without encryption. Legitimate banks and account portals always use HTTPS.',
+            category: 'Link Signal',
+            title: 'Uses unencrypted HTTP instead of HTTPS',
+            weight: 10,
+            severity: 'caution',
+            explanation: 'Plain HTTP transmits data without transport encryption. Official banking, billing, and login pages always use HTTPS.',
             snippet: 'http://'
           });
         }
@@ -2279,152 +2461,266 @@
 
       /**
        * ============================================================================
-       * 4. MESSAGE ANALYZER MODULE
-       * Scans message text against weighted rules, extracts embedded URLs, checks
-       * brand-to-link mismatches, and returns exact character spans for highlighting.
+       * 4. REBUILT MESSAGE ANALYZER MODULE (STEP 2)
+       * Normalizes text, evaluates all 18 message rules (with warning-phrase guards),
+       * extracts all URLs (including scheme-less shorteners), adds link signals,
+       * applies the 4 combo bonuses, and produces exact raw-text highlight spans.
        * ============================================================================
        */
+      function isPrecededBySafetyWarning(normText, matchStart, matchText) {
+        const windowStart = Math.max(0, matchStart - 40);
+        const contextSlice = normText.slice(windowStart, matchStart + matchText.length + 25);
+        const warningPattern = /\b(?:never|do\s+not|don'?t|dont|must\s+not|should\s+not|please\s+do\s+not|kabhi\s+(?:bhi\s+)?)\s+(?:ever\s+)?(?:share|send|tell|give|disclose|reveal|enter|batao|bhejo)\b|\b(?:share|batao|bhejo)\s+(?:na|mat)\s+(?:karein|karo|kare)\b/i;
+        return warningPattern.test(contextSlice);
+      }
+
+      function hasOverallSafetyDisclaimer(normText) {
+        return /\b(?:never\s+share\s+(?:your\s+)?(?:otp|pin|cvv|password)|do\s+not\s+share\s+(?:your\s+)?(?:otp|pin|cvv|password)|kabhi\s+(?:bhi\s+)?(?:otp|pin)\s+share\s+na\s+karein)\b/i.test(normText);
+      }
+
+      function extractUrlsFromText(rawText) {
+        const text = String(rawText || '');
+        const results = [];
+        // Matches http(s)://..., www...., scheme-less shorteners (bit.ly/...), or bare domains with path/suspicious TLD
+        const urlRegex = /\b(?:https?:\/\/|www\.)[^\s<>()"']+|\b(?:bit\.ly|tinyurl\.com|t\.co|cutt\.ly|rb\.gy|is\.gd|tiny\.cc|shorturl\.at)\/[^\s<>()"']+|\b[a-z0-9][a-z0-9.-]+\.(?:top|xyz|click|tk|ml|zip|loan|online|site|in|com|co\.in|org|net|gov\.in)(?:\/[^\s<>()"']*)?/gi;
+
+        let m;
+        while ((m = urlRegex.exec(text)) !== null) {
+          let rawMatch = m[0];
+          let start = m.index;
+          // Strip trailing punctuation like period at end of sentence
+          const cleanMatch = rawMatch.replace(/[.,!?;:)]+$/, '');
+          const end = start + cleanMatch.length;
+
+          // Skip attachment filenames like "invoice.pdf.exe" or "schedule.html" when no scheme or slash is present
+          if (!/^https?:\/\//i.test(cleanMatch) && !cleanMatch.includes('/')) {
+            const tldPart = cleanMatch.split('.').pop().toLowerCase();
+            if (!LURE_DATA.suspiciousTlds.has(tldPart) && !LURE_DATA.urlShorteners.has(cleanMatch.toLowerCase())) {
+              continue;
+            }
+          }
+
+          results.push({ url: cleanMatch, start, end });
+        }
+        return results;
+      }
+
       function analyzeMessageInput(rawText) {
         const text = String(rawText || '');
-        const signals = [];
-        const rawHighlights = [];
-
         if (!text.trim()) {
           return { text, signals: [], highlights: [], score: 0 };
         }
 
-        // 1. Run all pattern-based message rules and capture character spans
+        const normObj = normalizeTextWithOffsetMap(text);
+        const { normText, lookalikeText, offsetMap } = normObj;
+
+        const extractedUrls = extractUrlsFromText(text);
+        const hasAnyLink = extractedUrls.length > 0;
+        const hasAttachmentMention = /\b[\w-]+\.(?:exe|scr|zip|html|htm|iso|js|pdf\.exe|doc\.exe)\b/i.test(normText);
+        const hasSafetyNotice = hasOverallSafetyDisclaimer(normText);
+
+        const stagedRuleResults = [];
+        const rawHighlights = [];
+
+        // 1. Evaluate all 18 Message Rules on normalized text (and lookalikeText fallback)
         for (const rule of LURE_DATA.messageRules) {
-          const ruleMatches = [];
-          for (const regex of rule.patterns) {
-            const clone = new RegExp(regex.source, regex.flags);
-            let match;
-            while ((match = clone.exec(text)) !== null) {
-              const matchedStr = match[0];
-              if (!matchedStr) {
-                clone.lastIndex++;
-                continue;
-              }
-              const start = match.index;
-              const end = start + matchedStr.length;
-              ruleMatches.push({ start, end, text: matchedStr });
-            }
-          }
-
-          if (ruleMatches.length > 0) {
-            const signalId = rule.id;
-            signals.push({
-              id: signalId,
-              category: rule.category,
-              title: rule.title,
-              weight: rule.weight,
-              severity: rule.severity,
-              explanation: rule.explanation,
-              snippet: ruleMatches.slice(0, 3).map(m => `"${m.text}"`).join(', ')
-            });
-
-            for (const m of ruleMatches) {
-              rawHighlights.push({
-                start: m.start,
-                end: m.end,
-                signalId,
-                title: rule.title,
-                category: rule.category,
-                weight: rule.weight,
-                severity: rule.severity,
-                explanation: rule.explanation
-              });
-            }
-          }
-        }
-
-        // 2. Detect mentioned brands in the message text
-        const lowerText = text.toLowerCase();
-        const mentionedBrands = [];
-        for (const brand of LURE_DATA.knownBrands) {
-          for (const token of brand.tokens) {
-            const brandRegex = new RegExp(`\\b${token}\\b`, 'i');
-            if (brandRegex.test(lowerText)) {
-              mentionedBrands.push(brand);
-              break;
-            }
-          }
-        }
-
-        // 3. Extract embedded URLs inside the message and analyze them
-        const urlRegex = /\b(?:https?:\/\/|www\.)[^\s<>()"']+(?<![.,!?;:)])|\b[a-z0-9.-]+\.(?:com|in|co\.in|org|net|gov\.in|xyz|top|click|tk|ml|zip|online|site|info|biz|me|ly)(?:\/[^\s<>()"']*[^\s<>()"'.,!?;:)])?/gi;
-        let urlMatch;
-        while ((urlMatch = urlRegex.exec(text)) !== null) {
-          const matchedUrl = urlMatch[0];
-          const start = urlMatch.index;
-          const end = start + matchedUrl.length;
-
-          // Avoid treating common attachment filenames like "invoice.pdf.exe" as URLs
-          if (/\.(?:pdf|exe|scr|doc|docx|xls|zip|html|htm|iso)$/i.test(matchedUrl) && !/^https?:\/\//i.test(matchedUrl)) {
+          if (rule.requiresLinkOrAttachment && !hasAnyLink && !hasAttachmentMention) {
             continue;
           }
 
-          const urlResult = analyzeUrlInput(matchedUrl);
-          const regDomain = urlResult.anatomy ? urlResult.anatomy.registrableDomain : '';
+          const ruleSpans = [];
+          for (const pattern of rule.patterns) {
+            // Search normText first; if no match, also check lookalikeText for obfuscated keywords
+            for (const targetStr of [normText, lookalikeText]) {
+              const regex = new RegExp(pattern.source, pattern.flags);
+              let match;
+              while ((match = regex.exec(targetStr)) !== null) {
+                const matchedStr = match[0];
+                if (!matchedStr) {
+                  regex.lastIndex++;
+                  continue;
+                }
 
-          // Check if message mentions a known brand (e.g. SBI, HDFC, Microsoft) but link domain does not match
-          let mismatchedBrand = null;
-          for (const b of mentionedBrands) {
-            if (regDomain && !b.domains.includes(regDomain)) {
-              mismatchedBrand = b;
-              break;
+                // Check warning exclusion for OTP/credential requests
+                if (rule.excludeIfWarning && isPrecededBySafetyWarning(normText, match.index, matchedStr)) {
+                  continue;
+                }
+
+                const mappedSpan = mapNormSpanToRaw(offsetMap, match.index, match.index + matchedStr.length, text.length);
+                const originalSlice = text.slice(mappedSpan.start, mappedSpan.end);
+
+                // Avoid duplicate spans for the same rule at the same position
+                if (!ruleSpans.some(s => s.start === mappedSpan.start && s.end === mappedSpan.end)) {
+                  ruleSpans.push({
+                    start: mappedSpan.start,
+                    end: mappedSpan.end,
+                    text: originalSlice
+                  });
+                }
+              }
+              if (ruleSpans.length > 0) break;
             }
           }
 
-          if (mismatchedBrand) {
-            const mismatchId = 'MSG_BRAND_LINK_MISMATCH_' + start;
-            const explainText = `This message claims to be from ${mismatchedBrand.name}, but the link Actually goes to "${regDomain}" instead of an official domain (${mismatchedBrand.domains.join(' or ')}).`;
-            signals.push({
-              id: mismatchId,
-              category: 'Brand Spoofing',
-              title: `Mentions ${mismatchedBrand.name} with a mismatched link (${regDomain})`,
-              weight: 38,
-              severity: 'high',
-              explanation: explainText,
-              snippet: defangUrl(matchedUrl)
-            });
-            rawHighlights.push({
-              start,
-              end,
-              signalId: mismatchId,
-              title: `Mismatched link for ${mismatchedBrand.name}`,
-              category: 'Brand Spoofing',
-              weight: 38,
-              severity: 'high',
-              explanation: explainText
-            });
-          } else if (urlResult.score >= 20 && urlResult.signals.length > 0) {
-            const topUrlSignal = urlResult.signals[0];
-            const embedId = 'MSG_EMBEDDED_URL_' + start;
-            const weight = Math.min(32, Math.max(18, Math.round(urlResult.score * 0.6)));
-            signals.push({
-              id: embedId,
-              category: 'Suspicious Link in Message',
-              title: `Suspicious link detected: ${topUrlSignal.title}`,
-              weight,
-              severity: urlResult.score >= 35 ? 'high' : 'medium',
-              explanation: topUrlSignal.explanation,
-              snippet: defangUrl(matchedUrl)
-            });
-            rawHighlights.push({
-              start,
-              end,
-              signalId: embedId,
-              title: topUrlSignal.title,
-              category: 'Suspicious Link',
-              weight,
-              severity: urlResult.score >= 35 ? 'high' : 'medium',
-              explanation: topUrlSignal.explanation
+          if (ruleSpans.length > 0) {
+            stagedRuleResults.push({
+              rule,
+              spans: ruleSpans
             });
           }
         }
 
-        // Resolve overlapping highlights (keep higher severity/weight or longer span first)
+        // 2. Evaluate all extracted URLs in the message and collect their link signals
+        const linkSignals = [];
+        extractedUrls.forEach((uObj, idx) => {
+          const urlRes = analyzeUrlInput(uObj.url);
+          if (urlRes.signals.length > 0) {
+            urlRes.signals.forEach(ls => {
+              const uniqueSigId = `${ls.id}_MSG_${idx}`;
+              linkSignals.push({
+                id: uniqueSigId,
+                baseId: ls.id,
+                category: ls.category,
+                title: ls.title,
+                weight: ls.weight,
+                severity: ls.severity,
+                explanation: ls.explanation,
+                snippet: defangUrl(uObj.url)
+              });
+            });
+
+            const topSeverity = urlRes.signals.some(s => s.severity === 'high') ? 'high' : 'caution';
+            const totalLinkPts = urlRes.signals.reduce((sum, s) => sum + s.weight, 0);
+            rawHighlights.push({
+              start: uObj.start,
+              end: uObj.end,
+              signalId: `${urlRes.signals[0].id}_MSG_${idx}`,
+              title: urlRes.signals.map(s => s.title).join(' + '),
+              category: 'Suspicious Link',
+              weight: totalLinkPts,
+              severity: topSeverity,
+              explanation: urlRes.signals[0].explanation
+            });
+          }
+        });
+
+        // 3. Filter conditional rules (MSG_UNEXPECTED_TXN and MSG_AUTHORITY)
+        const hasOtherNonConditionalSignal = stagedRuleResults.some(
+          r => !r.rule.requiresOtherSignal && !r.rule.requiresSuspiciousContext
+        ) || linkSignals.length > 0;
+
+        const signals = [];
+
+        for (const item of stagedRuleResults) {
+          const { rule, spans } = item;
+
+          // Unexpected transaction bait only triggers if there is no "Never share OTP" disclaimer AND there is another action/risk signal
+          if (rule.requiresSuspiciousContext) {
+            if (hasSafetyNotice && !hasOtherNonConditionalSignal) {
+              continue;
+            }
+            if (!hasOtherNonConditionalSignal) {
+              continue;
+            }
+          }
+
+          // Authority impersonation only triggers when combined with at least one other signal
+          if (rule.requiresOtherSignal) {
+            const otherActiveCount = stagedRuleResults.filter(r => r.rule.id !== 'MSG_AUTHORITY' && (!r.rule.requiresSuspiciousContext || (!hasSafetyNotice && hasOtherNonConditionalSignal))).length + linkSignals.length;
+            if (otherActiveCount === 0) {
+              continue;
+            }
+          }
+
+          signals.push({
+            id: rule.id,
+            baseId: rule.id,
+            category: 'Message Rule',
+            title: rule.label,
+            weight: rule.points,
+            severity: rule.severity,
+            explanation: rule.explanation,
+            snippet: spans.slice(0, 3).map(s => `"${s.text}"`).join(', ')
+          });
+
+          for (const sp of spans) {
+            rawHighlights.push({
+              start: sp.start,
+              end: sp.end,
+              signalId: rule.id,
+              title: rule.label,
+              category: 'Message Rule',
+              weight: rule.points,
+              severity: rule.severity,
+              explanation: rule.explanation
+            });
+          }
+        }
+
+        // Append all link signals triggered by URLs inside the message
+        for (const ls of linkSignals) {
+          signals.push(ls);
+        }
+
+        // 4. Evaluate COMBO BONUSES (STEP 2)
+        const activeIds = new Set(signals.map(s => s.baseId || s.id));
+
+        // Combo 1: OTP request + urgency + authority impersonation (+20)
+        if (activeIds.has('MSG_OTP_CREDENTIAL') && activeIds.has('MSG_URGENCY') && activeIds.has('MSG_AUTHORITY')) {
+          signals.push({
+            id: 'COMBO_OTP_URGENCY_AUTH',
+            category: 'Combo Bonus',
+            title: 'Combo: OTP request + Urgency + Authority impersonation',
+            weight: 20,
+            severity: 'high',
+            explanation: 'Combining an authority name with high-pressure urgency and an OTP/credential request is the #1 signature of banking and card fraud.',
+            snippet: 'OTP + Urgency + Authority'
+          });
+        }
+
+        // Combo 2: Account threat + link (+15)
+        if (activeIds.has('MSG_ACCOUNT_THREAT') && hasAnyLink) {
+          signals.push({
+            id: 'COMBO_THREAT_LINK',
+            category: 'Combo Bonus',
+            title: 'Combo: Account suspension/penalty threat paired with a link',
+            weight: 15,
+            severity: 'high',
+            explanation: 'Threatening account closure or a fine while supplying a direct link is designed to funnel panicked users onto a fake portal.',
+            snippet: 'Account Threat + Link'
+          });
+        }
+
+        // Combo 3: Credential harvesting + suspicious or document-sharing domain (+10)
+        const hasSuspiciousOrDocDomain = linkSignals.some(ls =>
+          ['URL_UNTRUSTED_DOC_SHARE', 'URL_SUSPICIOUS_TLD', 'URL_SHORTENER', 'URL_LOOKALIKE_BRAND', 'URL_BRAND_MISMATCH', 'URL_HYPHEN_BAIT', 'URL_RAW_IP', 'URL_AT_TRICK'].includes(ls.baseId)
+        );
+        if (activeIds.has('MSG_CREDENTIAL_HARVEST') && hasSuspiciousOrDocDomain) {
+          signals.push({
+            id: 'COMBO_HARVEST_DOMAIN',
+            category: 'Combo Bonus',
+            title: 'Combo: Login/verify prompt + untrusted or suspicious domain',
+            weight: 10,
+            severity: 'high',
+            explanation: 'Asking you to sign in or verify your account on a non-official document share, shortener, or suspicious domain strongly indicates credential harvesting.',
+            snippet: 'Credential Harvesting + Suspicious Domain'
+          });
+        }
+
+        // Combo 4: Three or more different high-severity rules (+10)
+        const highSeverityCount = signals.filter(s => s.severity === 'high' && s.category !== 'Combo Bonus').length;
+        if (highSeverityCount >= 3) {
+          signals.push({
+            id: 'COMBO_MULTI_HIGH',
+            category: 'Combo Bonus',
+            title: `Combo: ${highSeverityCount} distinct high-severity indicators triggered`,
+            weight: 10,
+            severity: 'high',
+            explanation: 'Multiple independent high-risk indicators fired simultaneously in this message.',
+            snippet: `${highSeverityCount} high-severity rules`
+          });
+        }
+
         const resolvedHighlights = resolveHighlightSpans(rawHighlights);
         const scoreObj = calculateScoreFromSignals(signals);
 
@@ -2493,7 +2789,6 @@
           return { valid: false, signals: [], auth: null, identity: null, hops: [], score: 0 };
         }
 
-        // Unfold RFC 5322 multi-line headers (lines starting with whitespace continue previous line)
         const unfoldedLines = text.replace(/\r\n/g, '\n').replace(/\n[ \t]+/g, ' ').split('\n');
         const headersMap = {};
         const receivedLines = [];
@@ -2519,7 +2814,6 @@
         const returnPathObj = extractEmailParts(headersMap['return-path']);
         const authRaw = (headersMap['authentication-results'] || '') + ' ' + (headersMap['received-spf'] || '');
 
-        // Parse SPF, DKIM, DMARC statuses
         function parseAuthProtocol(proto) {
           const match = authRaw.match(new RegExp(`\\b${proto}\\s*=\\s*(pass|fail|softfail|neutral|none|temperror|permerror)`, 'i'));
           if (match) return match[1].toLowerCase();
@@ -2536,7 +2830,6 @@
           dmarc: parseAuthProtocol('dmarc')
         };
 
-        // 1. Evaluate SPF, DKIM, DMARC failures
         if (auth.spf === 'fail' || auth.spf === 'softfail') {
           signals.push({
             id: 'HDR_SPF_FAIL',
@@ -2556,7 +2849,7 @@
             title: 'DKIM cryptographic signature failed',
             weight: 28,
             severity: 'high',
-            explanation: 'DKIM attaches a digital signature proving the email was genuinely sent by the domain and not altered in transit. A failure strongly indicates spoofing or tampering.',
+            explanation: 'DKIM attaches a digital signature proving the email was genuinely sent by the domain and not altered in transit.',
             snippet: 'dkim=fail'
           });
         }
@@ -2568,12 +2861,11 @@
             title: 'DMARC alignment failed',
             weight: 35,
             severity: 'high',
-            explanation: 'DMARC verifies that the visible "From" address aligns with validated SPF or DKIM domains. Failing DMARC is one of the strongest indicators of a spoofed sender.',
+            explanation: 'DMARC verifies that the visible "From" address aligns with validated SPF or DKIM domains. Failing DMARC is a strong indicator of spoofing.',
             snippet: 'dmarc=fail'
           });
         }
 
-        // 2. Compare From vs Reply-To domain
         if (fromObj.domain && replyToObj.domain && fromObj.domain !== replyToObj.domain) {
           signals.push({
             id: 'HDR_REPLY_TO_MISMATCH',
@@ -2581,25 +2873,23 @@
             title: `From domain (${fromObj.domain}) does not match Reply-To (${replyToObj.domain})`,
             weight: 28,
             severity: 'high',
-            explanation: 'Attackers forge a trusted "From" address but set "Reply-To" to an external account they control so any reply you send goes to the scammer.',
+            explanation: 'Attackers forge a trusted "From" address but set "Reply-To" to an external account they control so any reply goes to the scammer.',
             snippet: `From: ${fromObj.email} vs Reply-To: ${replyToObj.email}`
           });
         }
 
-        // 3. Compare From vs Return-Path domain
         if (fromObj.domain && returnPathObj.domain && fromObj.domain !== returnPathObj.domain) {
           signals.push({
             id: 'HDR_RETURN_PATH_MISMATCH',
             category: 'Header Spoofing',
             title: `From domain (${fromObj.domain}) differs from Return-Path (${returnPathObj.domain})`,
             weight: 20,
-            severity: 'medium',
-            explanation: 'While marketing tools sometimes use a custom bounce address, a suspicious Return-Path paired with failed authentication shows the mail originated elsewhere.',
+            severity: 'caution',
+            explanation: 'A mismatched Return-Path paired with failed authentication shows the message was dispatched by an unrelated server.',
             snippet: `Return-Path: ${returnPathObj.email}`
           });
         }
 
-        // 4. Display Name Spoofing (Display Name mentions a brand or email that doesn't match actual sender domain)
         if (fromObj.displayName && fromObj.domain) {
           for (const brand of LURE_DATA.knownBrands) {
             const dnLower = fromObj.displayName.toLowerCase();
@@ -2609,9 +2899,9 @@
                 id: 'HDR_DISPLAY_NAME_SPOOF',
                 category: 'Display Name Spoofing',
                 title: `Display name claims "${fromObj.displayName}" but actual domain is "${fromObj.domain}"`,
-                weight: 36,
+                weight: 35,
                 severity: 'high',
-                explanation: `Many mobile mail apps only show the Display Name ("${fromObj.displayName}"). Behind the scenes, the actual sender domain (${fromObj.domain}) does not belong to ${brand.name}.`,
+                explanation: `Mobile mail clients often show only the Display Name ("${fromObj.displayName}"), hiding that the sender domain (${fromObj.domain}) does not belong to ${brand.name}.`,
                 snippet: `${fromObj.displayName} <${fromObj.email}>`
               });
               break;
@@ -2619,7 +2909,6 @@
           }
         }
 
-        // 5. Parse Received chain hops (reverse so index 0 is origin and last is destination)
         const chronologicalReceived = [...receivedLines].reverse();
         const hops = chronologicalReceived.map((rawHop, idx) => {
           const fromMatch = rawHop.match(/\bfrom\s+([^\s;]+)/i);
@@ -2636,23 +2925,6 @@
             raw: rawHop
           };
         });
-
-        // Check if first hop origin looks suspicious compared to claimed From domain
-        if (hops.length > 0 && fromObj.domain) {
-          const originHost = hops[0].fromHost.toLowerCase();
-          const originReg = getRegistrableDomain(originHost);
-          if (originReg && LURE_DATA.suspiciousTlds.has(originReg.split('.').pop())) {
-            signals.push({
-              id: 'HDR_SUSPICIOUS_ORIGIN_HOP',
-              category: 'Origin Relay',
-              title: `Originating mail server uses a suspicious host (${originHost})`,
-              weight: 22,
-              severity: 'medium',
-              explanation: 'The earliest Received header shows the message entered the mail stream from an unusual server that does not match the claimed organization.',
-              snippet: originHost
-            });
-          }
-        }
 
         const identity = {
           displayName: fromObj.displayName || '(none)',
@@ -2673,63 +2945,66 @@
 
       /**
        * ============================================================================
-       * 6. TRANSPARENT SCORER & VERDICT ENGINE
-       * Combines triggered signal weights into 0-100 score and maps to 4 tiers.
+       * 6. TRANSPARENT SCORER & VERDICT ENGINE (STEP 2 BANDS)
+       * Verdict Bands:
+       * - 0 to 9:  "No known patterns found" (never writes "Looks safe")
+       * - 10 to 29: "Be careful"
+       * - 30 to 59: "Likely phishing"
+       * - 60 to 100: "Dangerous"
        * ============================================================================
        */
       function calculateScoreFromSignals(signals) {
         const rawSum = signals.reduce((acc, s) => acc + (Number(s.weight) || 0), 0);
         const score = Math.min(100, Math.max(0, rawSum));
 
-        let verdict = 'Looks safe';
+        let verdict = 'No known patterns found';
         let tier = 'tier-safe';
         let colorVar = 'var(--sage)';
-        let summary = 'No common phishing patterns, deceptive links, or authentication failures were triggered by our rules. Still, always verify unexpected requests directly.';
+        let summary = 'No phishing rules triggered on this input. Because rule engines only catch known patterns, still verify any unexpected request directly through an official app or website.';
 
-        if (score >= 75) {
+        if (score >= 60) {
           verdict = 'Dangerous';
           tier = 'tier-danger';
           colorVar = 'var(--vermilion)';
-          summary = 'Multiple high-risk phishing indicators were detected. This strongly resembles an active scam or credential harvesting attempt. Do not click, reply, or share any code.';
-        } else if (score >= 45) {
+          summary = 'High-confidence phishing or scam indicators detected. Do not click any links, do not call numbers in the message, and never share an OTP, PIN, or password.';
+        } else if (score >= 30) {
           verdict = 'Likely phishing';
           tier = 'tier-phishing';
           colorVar = 'var(--vermilion)';
-          summary = 'Significant manipulation tactics or technical mismatches were found. Treat this as untrusted until you independently verify it through an official channel.';
-        } else if (score >= 16) {
+          summary = 'Multiple manipulation tactics or deceptive domain signals were found. Treat this as untrusted until you verify it independently through an official channel.';
+        } else if (score >= 10) {
           verdict = 'Be careful';
           tier = 'tier-caution';
           colorVar = 'var(--amber)';
-          summary = 'Some caution signals were detected. While legitimate messages occasionally use urgent phrasing, pause and verify before taking action.';
+          summary = 'Caution signals were detected. Pause and verify the sender independently before acting or clicking.';
         }
 
         return { score, rawSum, verdict, tier, colorVar, summary };
       }
 
-      // Generates tailored, actionable "What to do next" steps by verdict
       function getNextStepsForVerdict(score, mode) {
-        if (score >= 45) {
+        if (score >= 30) {
           return [
-            'Do not click any links, scan QR codes, download attachments, or reply to the sender.',
-            'Never share your OTP, UPI PIN, CVV, or password—and remember you NEVER enter a UPI PIN to receive money.',
-            'To check your account status safely, open your official banking/service app directly or type the known official website address yourself.',
-            'If you already clicked and entered a password, change it immediately from a clean device and enable two-factor authentication.',
-            'For financial or UPI fraud in India: Contact your bank immediately to freeze the channel, call the National Cyber Crime Helpline at 1930 right away, or file a report at cybercrime.gov.in.'
+            'Do not click any links, scan QR codes, download attachments, or call/WhatsApp phone numbers listed inside the message.',
+            'Remember: A real bank or government office will never ask you to share an OTP, UPI PIN, CVV, or net banking password.',
+            'To check your account or bill status safely, open the official banking/utility app directly or type the known official website address yourself.',
+            'If you already clicked a link and entered a password, change it immediately from a clean device and enable two-factor authentication.',
+            'For financial or UPI fraud in India: Contact your bank immediately, call the National Cyber Crime Helpline at 1930 right away, or report at cybercrime.gov.in.'
           ];
         }
-        if (score >= 16) {
+        if (score >= 10) {
           return [
-            'Pause before acting—attackers rely on urgency to rush your decision.',
-            'Verify the request independently by opening the official app or calling the official customer care number printed on the back of your bank card.',
+            'Pause before acting—social engineering relies on urgency or false familiarity to rush your decision.',
+            'Verify the request independently by calling the official number printed on the back of your bank card or visiting the official website directly.',
             mode === 'link'
-              ? 'Check the highlighted Registrable Domain carefully before visiting the page.'
-              : 'Hover over or inspect any links before clicking, and never open unexpected .zip, .html, or executable attachments.'
+              ? 'Check the emphasized Real Registrable Domain carefully before visiting the page.'
+              : 'Inspect any links or attachments carefully, and never enter your email or banking password on an unfamiliar domain.'
           ];
         }
         return [
-          'Our rule engine did not find known phishing triggers, but rules cannot catch zero-day scams or private context.',
-          'If this message asks for money, sensitive documents, or unusual actions, confirm with the sender through a trusted voice call or official app.',
-          'Keep your browser and operating system updated and use a password manager—it will refuse to autofill passwords on lookalike domains.'
+          'No known phishing rules fired, but absence of a match does not guarantee safety—always stay alert with unexpected requests.',
+          'Remember: A real bank or government office will never ask you to share an OTP or PIN.',
+          'Use a password manager—it will refuse to autofill your credentials on lookalike phishing domains.'
         ];
       }
 
@@ -2745,7 +3020,6 @@
       let memoryGeminiApiKey = ''; // Stored strictly in JS memory, never in localStorage
       let allReasonsExpanded = false;
 
-      // DOM Element References
       const els = {
         brandResetBtn: document.getElementById('brandResetBtn'),
         tabs: document.querySelectorAll('.tab-btn'),
@@ -2801,7 +3075,11 @@
         askAiBtn: document.getElementById('askAiBtn'),
         clearAiKeyBtn: document.getElementById('clearAiKeyBtn'),
         aiResponseBox: document.getElementById('aiResponseBox'),
-        selftestBanner: document.getElementById('selftestBanner')
+        selftestPanel: document.getElementById('selftestPanel'),
+        selftestSummaryBadge: document.getElementById('selftestSummaryBadge'),
+        selftestFailSummary: document.getElementById('selftestFailSummary'),
+        selftestTableBody: document.getElementById('selftestTableBody'),
+        runSelftestLink: document.getElementById('runSelftestLink')
       };
 
       const modeConfig = {
@@ -2809,14 +3087,14 @@
           eyebrow: 'MODE 01 // EMAIL & SMS DETECTOR',
           subtitle: 'Paste a suspicious email or SMS below. Lure inspects it locally in your browser, highlights manipulation tactics inline, and explains every signal in plain English.',
           label: 'PASTE MESSAGE TEXT',
-          placeholder: 'e.g. Dear customer, your SBI account will be suspended within 24 hours due to incomplete KYC. Update immediately at http://sbi-kyc-update.xyz...',
+          placeholder: 'e.g. Sir aapka account band ho jayega aaj raat. Abhi KYC update karo is link par: http://hdfc-kyc-update.top...',
           isMono: false
         },
         link: {
           eyebrow: 'MODE 02 // CLIENT-SIDE URL INSPECTOR',
           subtitle: 'Paste any suspicious link. Lure parses its anatomy offline, checks for lookalike domains against 65+ brands, and generates a safe defanged URL without ever visiting the site.',
           label: 'PASTE SUSPICIOUS URL',
-          placeholder: 'e.g. http://sbi-online.rnicrosoft-support.xyz/kyc-verify/login?token=confirm',
+          placeholder: 'e.g. http://paypa1-secure-login.xyz/verify',
           isMono: true
         },
         headers: {
@@ -2885,12 +3163,14 @@
           }
 
           const mark = document.createElement('mark');
-          mark.className = `lure-mark severity-${h.severity === 'high' ? 'high' : 'medium'}`;
+          const sevClass = h.severity === 'high' ? 'high' : 'caution';
+          mark.className = `lure-mark severity-${sevClass}`;
           mark.tabIndex = 0;
           mark.dataset.signalId = h.signalId;
           mark.dataset.highlightIdx = String(idx);
           mark.setAttribute('role', 'button');
-          mark.setAttribute('aria-label', `${h.title}. Press Enter for details.`);
+          mark.setAttribute('title', `${h.title} (+${h.weight} pts): ${h.explanation}`);
+          mark.setAttribute('aria-label', `${h.title}. Press Enter or hover for details.`);
           mark.appendChild(document.createTextNode(rawText.slice(h.start, h.end)));
 
           const activateHighlight = () => {
@@ -2899,6 +3179,7 @@
           };
 
           mark.addEventListener('click', activateHighlight);
+          mark.addEventListener('mouseenter', () => showHighlightTooltip(h, mark));
           mark.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
@@ -2919,8 +3200,9 @@
         document.querySelectorAll('.lure-mark.is-active').forEach(el => el.classList.remove('is-active'));
         if (markEl) markEl.classList.add('is-active');
 
-        els.tooltipMeta.textContent = `${h.category} // +${h.weight} PTS`;
-        els.tooltipMeta.className = `tooltip-meta ${h.severity === 'high' ? 'is-high' : 'is-medium'}`;
+        const isHigh = h.severity === 'high';
+        els.tooltipMeta.textContent = `${isHigh ? 'HIGH SEVERITY' : 'CAUTION'} // +${h.weight} PTS`;
+        els.tooltipMeta.className = `tooltip-meta ${isHigh ? 'is-high' : 'is-caution'}`;
         els.tooltipTitle.textContent = h.title;
         els.tooltipDesc.textContent = h.explanation;
         els.annotationTooltip.hidden = false;
@@ -3087,7 +3369,7 @@
           badge.textContent = '0 PTS';
           const title = document.createElement('span');
           title.className = 'finding-title';
-          title.textContent = 'No suspicious rule patterns triggered';
+          title.textContent = 'No known phishing patterns fired on this input';
           tGroup.appendChild(badge);
           tGroup.appendChild(title);
           top.appendChild(tGroup);
@@ -3118,7 +3400,7 @@
             tGroup.className = 'finding-title-group';
 
             const weightBadge = document.createElement('span');
-            weightBadge.className = `finding-weight ${sig.severity === 'high' ? 'is-high' : 'is-medium'}`;
+            weightBadge.className = `finding-weight ${sig.severity === 'high' ? 'is-high' : 'is-caution'}`;
             weightBadge.textContent = `+${sig.weight}`;
 
             const titleSpan = document.createElement('span');
@@ -3155,7 +3437,6 @@
               whyBtn.textContent = isHidden ? 'Hide why' : 'Show why';
             });
 
-            // Clicking finding card pulses corresponding inline highlight in Message mode
             li.addEventListener('click', () => {
               const matchingMarks = document.querySelectorAll(`.lure-mark[data-signal-id="${sig.id}"]`);
               document.querySelectorAll('.lure-mark.is-active').forEach(m => m.classList.remove('is-active'));
@@ -3175,25 +3456,23 @@
             li.appendChild(detailsDiv);
             els.findingsList.appendChild(li);
 
-            // Populate transparent score calculation table row
             const tr = document.createElement('tr');
             const tdTitle = document.createElement('td');
             tdTitle.textContent = sig.title;
-            const tdCat = document.createElement('td');
-            tdCat.textContent = sig.category;
+            const tdSev = document.createElement('td');
+            tdSev.textContent = sig.severity.toUpperCase();
             const tdPts = document.createElement('td');
             tdPts.textContent = `+${sig.weight}`;
             tr.appendChild(tdTitle);
-            tr.appendChild(tdCat);
+            tr.appendChild(tdSev);
             tr.appendChild(tdPts);
             els.calcTableBody.appendChild(tr);
           });
 
-          // Total row
           const totalTr = document.createElement('tr');
           totalTr.style.fontWeight = '700';
           const tdTotalLabel = document.createElement('td');
-          tdTotalLabel.textContent = scoreObj.rawSum > 100 ? `Total (capped from ${scoreObj.rawSum})` : 'Total Final Score';
+          tdTotalLabel.textContent = scoreObj.rawSum > 100 ? `Total (capped at 100 from ${scoreObj.rawSum})` : 'Total Final Score';
           const tdEmpty = document.createElement('td');
           tdEmpty.textContent = '';
           const tdTotalVal = document.createElement('td');
@@ -3204,7 +3483,6 @@
           els.calcTableBody.appendChild(totalTr);
         }
 
-        // Render "What to do next" steps
         const steps = getNextStepsForVerdict(scoreObj.score, mode);
         els.nextStepsList.textContent = '';
         steps.forEach(s => {
@@ -3213,8 +3491,41 @@
           els.nextStepsList.appendChild(li);
         });
 
-        // Store plain-text report for Copy Report button
         lastAnalysisReport = buildPlainTextReport(mode, inputText, scoreObj, signals, steps);
+      }
+
+      function executeAnalysisNow() {
+        const rawVal = els.mainInput.value;
+        if (!rawVal.trim()) {
+          els.mainInput.focus();
+          return;
+        }
+
+        if (currentMode === 'message') {
+          const res = analyzeMessageInput(rawVal);
+          const scoreObj = calculateScoreFromSignals(res.signals);
+          els.annotatedContainer.hidden = false;
+          els.linkBreakdownPanel.hidden = true;
+          els.headersBreakdownPanel.hidden = true;
+          renderAnnotatedMessage(res.text, res.highlights);
+          renderResultsColumn(res.signals, scoreObj, 'message', rawVal);
+        } else if (currentMode === 'link') {
+          const res = analyzeUrlInput(rawVal);
+          const scoreObj = calculateScoreFromSignals(res.signals);
+          els.annotatedContainer.hidden = true;
+          els.linkBreakdownPanel.hidden = false;
+          els.headersBreakdownPanel.hidden = true;
+          renderLinkBreakdown(res);
+          renderResultsColumn(res.signals, scoreObj, 'link', res.defanged);
+        } else if (currentMode === 'headers') {
+          const res = analyzeHeadersInput(rawVal);
+          const scoreObj = calculateScoreFromSignals(res.signals);
+          els.annotatedContainer.hidden = true;
+          els.linkBreakdownPanel.hidden = true;
+          els.headersBreakdownPanel.hidden = false;
+          renderHeadersBreakdown(res);
+          renderResultsColumn(res.signals, scoreObj, 'headers', rawVal);
+        }
       }
 
       function runMainAnalysis() {
@@ -3224,38 +3535,11 @@
           return;
         }
 
-        // Trigger thin 400ms progress line animation
         els.progressBarTrack.classList.add('is-active');
-
+        executeAnalysisNow();
         setTimeout(() => {
           els.progressBarTrack.classList.remove('is-active');
-
-          if (currentMode === 'message') {
-            const res = analyzeMessageInput(rawVal);
-            const scoreObj = calculateScoreFromSignals(res.signals);
-            els.annotatedContainer.hidden = false;
-            els.linkBreakdownPanel.hidden = true;
-            els.headersBreakdownPanel.hidden = true;
-            renderAnnotatedMessage(res.text, res.highlights);
-            renderResultsColumn(res.signals, scoreObj, 'message', rawVal);
-          } else if (currentMode === 'link') {
-            const res = analyzeUrlInput(rawVal);
-            const scoreObj = calculateScoreFromSignals(res.signals);
-            els.annotatedContainer.hidden = true;
-            els.linkBreakdownPanel.hidden = false;
-            els.headersBreakdownPanel.hidden = true;
-            renderLinkBreakdown(res);
-            renderResultsColumn(res.signals, scoreObj, 'link', res.defanged);
-          } else if (currentMode === 'headers') {
-            const res = analyzeHeadersInput(rawVal);
-            const scoreObj = calculateScoreFromSignals(res.signals);
-            els.annotatedContainer.hidden = true;
-            els.linkBreakdownPanel.hidden = true;
-            els.headersBreakdownPanel.hidden = false;
-            renderHeadersBreakdown(res);
-            renderResultsColumn(res.signals, scoreObj, 'headers', rawVal);
-          }
-        }, 360);
+        }, 320);
       }
 
       function buildPlainTextReport(mode, input, scoreObj, signals, steps) {
@@ -3266,6 +3550,7 @@
           `Mode: ${mode.toUpperCase()}`,
           `Verdict: ${scoreObj.verdict} (${scoreObj.score}/100)`,
           `Summary: ${scoreObj.summary}`,
+          'Important: A real bank or government office will never ask you to share an OTP or PIN.',
           '',
           '--- INPUT SAMPLE (DEFANGED) ---',
           defangUrl(input.slice(0, 500)) + (input.length > 500 ? '...' : ''),
@@ -3277,7 +3562,7 @@
           lines.push('* None (0 pts)');
         } else {
           signals.forEach(s => {
-            lines.push(`* [+${s.weight} pts] ${s.title} (${s.category})`);
+            lines.push(`* [+${s.weight} pts | ${s.severity.toUpperCase()}] ${s.title}`);
             lines.push(`  Why: ${s.explanation}`);
             if (s.snippet) lines.push(`  Matched: ${s.snippet}`);
           });
@@ -3342,7 +3627,7 @@
         if (quizIndex >= LURE_DATA.quizQuestions.length) {
           quizEls.roundLabel.textContent = 'QUIZ COMPLETE';
           quizEls.scoreLabel.textContent = `FINAL SCORE: ${quizScore} / ${LURE_DATA.quizQuestions.length}`;
-          quizEls.promptBox.textContent = `You spotted ${quizScore} out of ${LURE_DATA.quizQuestions.length} lures correctly.\n\nKey takeaway: Always inspect the real registrable domain before clicking, treat artificial 24-hour urgency with skepticism, and never enter an OTP or UPI PIN to receive money or update KYC.`;
+          quizEls.promptBox.textContent = `You spotted ${quizScore} out of ${LURE_DATA.quizQuestions.length} items accurately.\n\nKey takeaway: A real bank or government office will never ask you to share an OTP or PIN. Always check the real registrable domain before signing in.`;
           quizEls.choiceRow.hidden = true;
           quizEls.feedbackBox.hidden = false;
           quizEls.feedbackTitle.textContent = quizScore >= 5 ? 'Sharp eye.' : 'Good practice.';
@@ -3372,15 +3657,15 @@
         quizEls.phishBtn.disabled = true;
         quizEls.scoreLabel.textContent = `SCORE: ${quizScore} / ${LURE_DATA.quizQuestions.length}`;
 
-        // Run actual Lure engine on the quiz item to show real score & signals
         const engineRes = q.mode === 'link' ? analyzeUrlInput(q.prompt) : analyzeMessageInput(q.prompt);
+        const verdictObj = calculateScoreFromSignals(engineRes.signals);
         const sigSummary = engineRes.signals.length > 0
-          ? `Lure Engine Score: ${engineRes.score}/100 — Signals: ${engineRes.signals.map(s => s.title).join(' | ')}`
-          : `Lure Engine Score: ${engineRes.score}/100 — No phishing signals triggered.`;
+          ? `Lure Engine: ${ engineRes.score }/100 (${verdictObj.verdict}) — Signals: ${engineRes.signals.map(s => `${s.title} [+${s.weight}]`).join(' | ')}`
+          : `Lure Engine: ${ engineRes.score }/100 (${verdictObj.verdict}) — No phishing signals triggered.`;
 
         quizEls.feedbackTitle.textContent = isCorrect
-          ? `Correct — ${q.isPhishing ? 'It is a phishing lure.' : 'It looks safe.'}`
-          : `Not quite — ${q.isPhishing ? 'This is actually a phishing lure.' : 'This one is actually safe.'}`;
+          ? `Correct — ${q.isPhishing ? 'It is a phishing lure.' : 'No known phishing patterns.'}`
+          : `Not quite — ${q.isPhishing ? 'This is actually a phishing lure.' : 'This one is a legitimate message/link.'}`;
         quizEls.feedbackTitle.style.color = isCorrect ? 'var(--sage)' : 'var(--vermilion)';
         quizEls.feedbackExplain.textContent = q.explanation;
         quizEls.engineSignals.textContent = sigSummary;
@@ -3434,116 +3719,207 @@
 
       /**
        * ============================================================================
-       * 8. AUTOMATED SELF-TEST SUITE (#selftest) — 12 Test Cases
+       * 8. AUTOMATED SELF-TEST SUITE (#selftest) — STEP 3 (12 Message + 4 Link Cases)
+       * Runs all 16 required test cases, prints a PASS/FAIL table to the console,
+       * and displays the Self-test panel on the page listing any FAIL.
        * ============================================================================
        */
       function runSelfTests() {
-        const tests = [
+        const testCases = [
           {
-            name: '1. Urgency & Account Threat Detection',
-            fn: () => {
-              const r = analyzeMessageInput('Your account has been suspended! Act now within 24 hours to avoid legal action.');
-              return r.score >= 35 && r.signals.some(s => s.id === 'MSG_URGENCY') && r.signals.some(s => s.id === 'MSG_THREATS');
-            }
+            id: 1,
+            name: '1. Electricity disconnection',
+            mode: 'message',
+            min: 70,
+            max: 100,
+            input: 'Dear Consumer, your electricity connection will be disconnected tonight at 9:30 PM because your previous month bill is not updated. Immediately contact our officer on 98XXXXXX21 or pay at http://jvvnl-bill-update.top'
           },
           {
-            name: '2. Credential & OTP Harvesting Detection',
-            fn: () => {
-              const r = analyzeMessageInput('Please share your 6-digit OTP and UPI PIN immediately to verify your identity.');
-              return r.signals.some(s => s.id === 'MSG_CREDENTIALS');
-            }
+            id: 2,
+            name: '2. PAN card suspended email',
+            mode: 'message',
+            min: 80,
+            max: 100,
+            input: 'Subject: PAN Card Suspended - Action Required. Dear Customer, Your PAN card has been suspended due to a mismatch in records. Update your details within 24 hours to avoid a penalty of Rs 10,000. Click here: https://incometax-pan-verify.click/update Enter your PAN, Aadhaar and net banking password to continue. Income Tax Department'
           },
           {
-            name: '3. Indian KYC & Electricity Scam Detection',
-            fn: () => {
-              const r = analyzeMessageInput('Your SBI PAN KYC is expired and electricity power will be disconnected tonight at 9:30 PM.');
-              return r.signals.some(s => s.id === 'MSG_INDIA_KYC_BANK') && r.signals.some(s => s.id === 'MSG_INDIA_ELECTRICITY');
-            }
+            id: 3,
+            name: '3. Netflix payment declined',
+            mode: 'message',
+            min: 70,
+            max: 100,
+            input: 'Subject: Your payment was declined. Hi user, we could not process your last payment and your membership will be cancelled in 12 hours. Update your card details now: http://netfl1x-billing.xyz/pay Netflix Support'
           },
           {
-            name: '4. Risky Double-Extension Attachment Detection',
-            fn: () => {
-              const r = analyzeMessageInput('Please open the attached receipt invoice_2026.pdf.exe for your records.');
-              return r.signals.some(s => s.id === 'MSG_RISKY_ATTACHMENT');
-            }
+            id: 4,
+            name: '4. Tax refund bit.ly SMS',
+            mode: 'message',
+            min: 60,
+            max: 100,
+            input: 'Income Tax Dept: Your refund of Rs 18,640 has been approved. Verify your bank account at bit.ly/itr-refund-2026 to receive the money today.'
           },
           {
-            name: '5. Brand Impersonation with Mismatched Link in Message',
-            fn: () => {
-              const r = analyzeMessageInput('Dear Customer, HDFC Bank alert: verify your account at https://secure-update-portal.xyz/login');
-              return r.signals.some(s => s.id.startsWith('MSG_BRAND_LINK_MISMATCH_'));
-            }
+            id: 5,
+            name: '5. Internship security deposit',
+            mode: 'message',
+            min: 70,
+            max: 100,
+            input: 'Congratulations!! You are shortlisted for a Cybersecurity Internship at Google. Stipend Rs 40,000/month. No interview. Pay Rs 1,500 refundable security deposit to confirm your seat. Send your Aadhaar copy and a photo on WhatsApp 91XXXXXXXX.'
           },
           {
-            name: '6. Safe Conversational Message Scores Low (<= 15)',
-            fn: () => {
-              const r = analyzeMessageInput('Hi Priya, thanks for sending the project notes. Let us meet at 3 PM tomorrow to review the design.');
-              return r.score === 0 && r.signals.length === 0;
-            }
+            id: 6,
+            name: '6. CEO gift card fraud',
+            mode: 'message',
+            min: 60,
+            max: 100,
+            input: 'Hi, I am in a meeting and cannot talk. I need you to urgently buy 5 Amazon gift cards of Rs 5,000 each and send me the codes here. I will reimburse you today. Keep this confidential.'
           },
           {
-            name: '7. URL Lookalike / Homoglyph Typosquatting (rnicrosoft)',
-            fn: () => {
-              const r = analyzeUrlInput('https://rnicrosoft.com/login');
-              return r.signals.some(s => s.id === 'URL_TYPOSQUAT') && r.score >= 40;
-            }
+            id: 7,
+            name: '7. SBI Credit Card OTP request',
+            mode: 'message',
+            min: 70,
+            max: 100,
+            input: 'Sir, this is from SBI Credit Card team. A payment of Rs 49,999 is being processed. If not done by you, share the OTP you just received to cancel it immediately.'
           },
           {
-            name: '8. URL Brand in Subdomain Trap (paypal.secure-login.xyz)',
-            fn: () => {
-              const r = analyzeUrlInput('http://paypal.secure-login.xyz/auth');
-              return r.signals.some(s => s.id === 'URL_BRAND_IN_SUBDOMAIN') && r.signals.some(s => s.id === 'URL_SUSPICIOUS_TLD');
-            }
+            id: 8,
+            name: '8. SAFE bank debit alert',
+            mode: 'message',
+            min: 0,
+            max: 15,
+            input: 'SBI: Rs 1,200 debited from A/c XX5521 on 21-10-26 at Swiggy. Not you? Call 1800-1234. Never share OTP, PIN or password with anyone.'
           },
           {
-            name: '9. URL Raw IP & @ Redirection Trick Detection',
-            fn: () => {
-              const r = analyzeUrlInput('http://onlinesbi.sbi@192.0.2.88/login');
-              return r.signals.some(s => s.id === 'URL_RAW_IP') && r.signals.some(s => s.id === 'URL_AT_TRICK');
-            }
+            id: 9,
+            name: '9. SAFE college lab notice',
+            mode: 'message',
+            min: 0,
+            max: 5,
+            input: 'Hi all, the Data Structures lab on Friday is moved to Room 204 at 11 AM. Please bring your record notebook. Thanks, Prof. Sharma'
           },
           {
-            name: '10. Legitimate Official Indian Bank URL Scores 0',
-            fn: () => {
-              const r = analyzeUrlInput('https://www.onlinesbi.sbi/sbijava/retail/html/faq.html');
-              return r.score === 0 && r.signals.length === 0;
-            }
+            id: 10,
+            name: '10. SAFE Flipkart delivery',
+            mode: 'message',
+            min: 0,
+            max: 10,
+            input: 'Your Flipkart order is out for delivery today and will arrive by 8 PM. Track it in the Flipkart app. Thank you for shopping with us.'
           },
           {
-            name: '11. Email Headers SPF/DMARC Fail & Reply-To Mismatch',
-            fn: () => {
-              const r = analyzeHeadersInput(LURE_DATA.examples.find(e => e.id === 'ex-bad-headers').content);
-              return r.score >= 70 && r.signals.some(s => s.id === 'HDR_SPF_FAIL') && r.signals.some(s => s.id === 'HDR_REPLY_TO_MISMATCH');
-            }
+            id: 11,
+            name: '11. Calm phishing doc-share',
+            mode: 'message',
+            min: 40,
+            max: 70,
+            input: 'Hello, as discussed in the meeting, please find the revised project schedule here: https://drive-share-docs.com/project-schedule. Sign in with your college email to open it. Regards, Admin Office'
           },
           {
-            name: '12. Email Headers Authenticated Pass Scores 0',
-            fn: () => {
-              const r = analyzeHeadersInput(LURE_DATA.examples.find(e => e.id === 'ex-safe-headers').content);
-              return r.score === 0 && r.auth.spf === 'pass' && r.auth.dkim === 'pass' && r.auth.dmarc === 'pass';
-            }
+            id: 12,
+            name: '12. Hinglish HDFC KYC scam',
+            mode: 'message',
+            min: 70,
+            max: 100,
+            input: 'Sir aapka account band ho jayega aaj raat. Abhi KYC update karo is link par: http://hdfc-kyc-update.top. Nahi to Rs 500 charge lagega.'
+          },
+          {
+            id: 13,
+            name: '13. Link: paypa1 lookalike (.xyz)',
+            mode: 'link',
+            min: 60,
+            max: 100,
+            input: 'http://paypa1-secure-login.xyz/verify'
+          },
+          {
+            id: 14,
+            name: '14. Link: sbi.co.in subdomain trap (.top)',
+            mode: 'link',
+            min: 60,
+            max: 100,
+            input: 'http://sbi.co.in.account-verify.top/login'
+          },
+          {
+            id: 15,
+            name: '15. Link: SAFE amazon.in',
+            mode: 'link',
+            min: 0,
+            max: 9,
+            input: 'https://www.amazon.in'
+          },
+          {
+            id: 16,
+            name: '16. Link: SAFE github.com',
+            mode: 'link',
+            min: 0,
+            max: 9,
+            input: 'https://github.com'
           }
         ];
 
-        let passed = 0;
-        console.group('%cLURE ENGINE SELF-TEST (12 CASES)', 'font-weight:bold; font-size:14px; color:#E5471B;');
-        const resultsTable = tests.map(t => {
-          let ok = false;
-          try {
-            ok = Boolean(t.fn());
-          } catch (e) {
-            ok = false;
+        let passedCount = 0;
+        const failedCases = [];
+        els.selftestTableBody.textContent = '';
+
+        console.group('%cLURE ENGINE SELF-TEST SUITE (16 CASES)', 'font-weight:bold; font-size:14px; color:#E5471B;');
+        const consoleRows = testCases.map(tc => {
+          const res = tc.mode === 'link' ? analyzeUrlInput(tc.input) : analyzeMessageInput(tc.input);
+          const scoreObj = calculateScoreFromSignals(res.signals);
+          const ok = res.score >= tc.min && res.score <= tc.max;
+          if (ok) {
+            passedCount++;
+          } else {
+            failedCases.push(`${tc.name} (scored ${res.score}, expected ${tc.min}–${tc.max})`);
           }
-          if (ok) passed++;
-          console.log(`${ok ? 'PASS' : 'FAIL'} — ${t.name}`);
-          return { Test: t.name, Result: ok ? 'PASS' : 'FAIL' };
+
+          const tr = document.createElement('tr');
+          const cells = [
+            String(tc.id),
+            tc.name,
+            tc.mode.toUpperCase(),
+            `${res.score}/100`,
+            `${tc.min}–${tc.max}`,
+            scoreObj.verdict,
+            ok ? 'PASS' : 'FAIL'
+          ];
+          cells.forEach((cText, idx) => {
+            const td = document.createElement('td');
+            if (idx === 6) {
+              const pill = document.createElement('span');
+              pill.className = `status-pill ${ok ? 'is-pass' : 'is-fail'}`;
+              pill.textContent = cText;
+              td.appendChild(pill);
+            } else {
+              td.textContent = cText;
+            }
+            tr.appendChild(td);
+          });
+          els.selftestTableBody.appendChild(tr);
+
+          return {
+            Case: tc.name,
+            Mode: tc.mode,
+            Score: res.score,
+            Expected: `${tc.min}-${tc.max}`,
+            Verdict: scoreObj.verdict,
+            Status: ok ? 'PASS' : 'FAIL'
+          };
         });
-        console.table(resultsTable);
-        console.log(`Summary: ${passed}/${tests.length} tests passed.`);
+
+        console.table(consoleRows);
+        console.log(`Summary: ${passedCount}/${testCases.length} passed.`);
         console.groupEnd();
 
-        els.selftestBanner.hidden = false;
-        els.selftestBanner.textContent = `SELF-TEST (#selftest): ${passed}/${tests.length} built-in engine assertions PASSED. Open browser console (F12) for full table.`;
+        els.selftestPanel.hidden = false;
+        els.selftestSummaryBadge.textContent = `${passedCount} / ${testCases.length} PASSED`;
+        els.selftestSummaryBadge.className = `status-pill ${failedCases.length === 0 ? 'is-pass' : 'is-fail'}`;
+
+        if (failedCases.length === 0) {
+          els.selftestFailSummary.textContent = '0 FAIL — All 16 built-in message and link test cases scored within their required ranges.';
+          els.selftestFailSummary.style.color = 'var(--sage)';
+        } else {
+          els.selftestFailSummary.textContent = `FAILED CASES (${failedCases.length}): ${failedCases.join(' | ')}`;
+          els.selftestFailSummary.style.color = 'var(--vermilion)';
+        }
       }
 
       function initApp() {
@@ -3691,7 +4067,14 @@
           }
         });
 
-        // Check #selftest on load and hashchange
+        // Self-test trigger on #selftest hash or footer link click
+        els.runSelftestLink.addEventListener('click', () => {
+          setTimeout(() => {
+            runSelfTests();
+            els.selftestPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 20);
+        });
+
         if (window.location.hash === '#selftest') {
           runSelfTests();
         }
