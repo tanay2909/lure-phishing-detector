@@ -1,0 +1,3709 @@
+<!--
+  ==============================================================================
+  LURE — "Spot the bait."
+  Client-Side Phishing Detection & Educational Engine
+  Built by Tanay Mathur, B.Tech CSE
+
+  HOW THE ENGINE WORKS:
+  1. Tokenizer & Normalizer:
+     Splits untrusted input into normalized tokens, character spans, URLs, and
+     RFC 5322 header fields without executing, fetching, or rendering raw HTML.
+  2. Multi-Layer Rules Engine:
+     - Message Analyzer: Scans text against weighted regex and phrase rules across
+       9 categories (Urgency, Fear/Threats, Credential Harvesting, Money Bait,
+       Generic Greetings, Brand Impersonation with Mismatched Links, Indian-Context
+       Scams [KYC, UPI, Electricity, Customs, Fake Jobs], Grammar/Punctuation
+       Anomalies, and Risky Attachment Extensions). Records exact [start, end]
+       character offsets for non-overlapping inline annotation.
+     - Link Analyzer: Parses URLs via the native URL API, defangs the output,
+       inspects TLDs, shorteners, raw IPs, @-tricks, punycode (xn--), mixed-script
+       homographs, and runs a Levenshtein + homoglyph skeleton comparator against
+       65+ global and Indian brands/banks.
+     - Header Parser: Unfolds RFC 5322 headers, compares From / Reply-To /
+       Return-Path domains, checks Display Name spoofing, parses SPF/DKIM/DMARC
+       authentication results, and reconstructs the Received hop timeline.
+  3. Transparent Scorer & DOM Renderer:
+     Sums capped signal weights into a 0-100 risk score, maps to 4 verdict tiers,
+     and constructs highlighted text strictly via DOM TextNodes (zero raw innerHTML)
+     to guarantee complete XSS safety.
+  ==============================================================================
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lure — Spot the bait.</title>
+  <meta name="description" content="Client-side phishing detector for emails, SMS, links, and headers. Transparent rules, inline annotations, and plain-English explanations.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FAFAF7;
+      --surface: #FFFFFF;
+      --surface-subtle: #F3F2ED;
+      --ink: #161616;
+      --ink-secondary: #52514E;
+      --ink-muted: #787672;
+      --line: #E6E4DE;
+      --line-strong: #CFCBC2;
+
+      /* Single primary accent: Vermilion */
+      --vermilion: #E5471B;
+      --vermilion-hover: #CC3B12;
+      --vermilion-soft: #FCECE8;
+      --vermilion-border: #F5B8A8;
+
+      /* Risk semantic palette: Muted Sage, Soft Amber, Vermilion */
+      --sage: #2D6A4F;
+      --sage-soft: #EAF2EE;
+      --sage-border: #B7D5C5;
+
+      --amber: #B36200;
+      --amber-soft: #FDF3E6;
+      --amber-border: #ECC896;
+
+      --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+
+      --radius: 4px;
+      --shadow-card: 0 4px 20px rgba(22, 22, 22, 0.04);
+      --transition: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      font-size: 16px;
+      background-color: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--bg);
+      color: var(--ink);
+      overflow-x: hidden;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+
+    button, input, textarea, select {
+      font: inherit;
+      color: inherit;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    .topbar {
+      border-bottom: 1px solid var(--line);
+      background-color: var(--bg);
+      position: sticky;
+      top: 0;
+      z-index: 40;
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 68px;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-top: 8px;
+      padding-bottom: 8px;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+    }
+
+    .brand-wordmark {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      color: var(--ink);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 4px 0;
+    }
+
+    .brand-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background-color: var(--vermilion);
+      border-radius: 1px;
+    }
+
+    .brand-tagline {
+      font-size: 0.875rem;
+      color: var(--ink-muted);
+      letter-spacing: -0.01em;
+    }
+
+    .nav-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .tab-list {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--surface-subtle);
+      padding: 3px;
+      gap: 2px;
+    }
+
+    .tab-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      padding: 8px 16px;
+      min-height: 40px;
+      font-family: var(--font-body);
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--ink-secondary);
+      border-radius: 2px;
+      cursor: pointer;
+      transition: background-color var(--transition), color var(--transition);
+    }
+
+    .tab-btn:hover {
+      color: var(--ink);
+    }
+
+    .tab-btn[aria-selected="true"] {
+      background-color: var(--surface);
+      color: var(--ink);
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(22, 22, 22, 0.06);
+    }
+
+    .quiz-trigger-btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background-color: transparent;
+      color: var(--ink);
+      padding: 8px 14px;
+      min-height: 44px;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: border-color var(--transition), background-color var(--transition);
+    }
+
+    .quiz-trigger-btn:hover,
+    .quiz-trigger-btn[aria-pressed="true"] {
+      border-color: var(--ink);
+      background-color: var(--surface);
+    }
+
+    .quiz-badge {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      padding: 1px 6px;
+      background-color: var(--surface-subtle);
+      border: 1px solid var(--line);
+      border-radius: 2px;
+    }
+
+    .progress-bar-track {
+      width: 100%;
+      height: 2px;
+      background-color: transparent;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background-color: var(--vermilion);
+      transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+      opacity: 0;
+    }
+
+    .progress-bar-track.is-active .progress-bar-fill {
+      width: 100%;
+      opacity: 1;
+    }
+
+    main {
+      flex: 1;
+      padding: 48px 0 72px;
+    }
+
+    .hero-header {
+      margin-bottom: 32px;
+      max-width: 760px;
+    }
+
+    .hero-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink-muted);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .hero-headline {
+      font-family: var(--font-display);
+      font-size: clamp(2.5rem, 5vw, 4.25rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1.02;
+      color: var(--ink);
+      margin-bottom: 12px;
+    }
+
+    .hero-subtitle {
+      font-size: 1.0625rem;
+      color: var(--ink-secondary);
+      max-width: 58ch;
+      line-height: 1.55;
+    }
+
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+
+    @media (min-width: 960px) {
+      .workspace-grid.has-results {
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+        gap: 40px;
+      }
+
+      .workspace-grid:not(.has-results) {
+        max-width: 760px;
+      }
+    }
+
+    .input-card {
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .input-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .input-label {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-secondary);
+    }
+
+    .input-mode-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .ghost-btn {
+      appearance: none;
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 6px 12px;
+      min-height: 36px;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--ink-secondary);
+      cursor: pointer;
+      transition: border-color var(--transition), color var(--transition), background-color var(--transition);
+    }
+
+    .ghost-btn:hover {
+      border-color: var(--ink);
+      color: var(--ink);
+      background-color: var(--surface-subtle);
+    }
+
+    .lure-textarea {
+      width: 100%;
+      min-height: 220px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+      font-size: 1rem;
+      line-height: 1.6;
+      resize: vertical;
+      transition: border-color var(--transition), background-color var(--transition);
+    }
+
+    .lure-textarea.is-mono {
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      line-height: 1.55;
+    }
+
+    .lure-textarea:focus {
+      outline: none;
+      border-color: var(--ink);
+      background-color: var(--surface);
+    }
+
+    .lure-textarea::placeholder {
+      color: var(--ink-muted);
+    }
+
+    .action-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    .primary-btn {
+      appearance: none;
+      border: 1px solid var(--vermilion);
+      background-color: var(--vermilion);
+      color: #FFFFFF;
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      padding: 12px 28px;
+      min-height: 48px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: background-color var(--transition), border-color var(--transition), transform 120ms ease;
+    }
+
+    .primary-btn:hover {
+      background-color: var(--vermilion-hover);
+      border-color: var(--vermilion-hover);
+    }
+
+    .primary-btn:active {
+      transform: translateY(1px);
+    }
+
+    .secondary-links {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .text-link-btn {
+      appearance: none;
+      background: none;
+      border: none;
+      padding: 8px 4px;
+      min-height: 44px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--ink-secondary);
+      text-decoration: underline;
+      text-underline-offset: 4px;
+      text-decoration-color: var(--line-strong);
+      cursor: pointer;
+      transition: color var(--transition), text-decoration-color var(--transition);
+    }
+
+    .text-link-btn:hover {
+      color: var(--ink);
+      text-decoration-color: var(--ink);
+    }
+
+    .examples-drawer {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+
+    .examples-drawer[hidden] {
+      display: none;
+    }
+
+    .examples-title {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-muted);
+      margin-bottom: 10px;
+    }
+
+    .examples-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 8px;
+    }
+
+    .example-chip {
+      appearance: none;
+      text-align: left;
+      background-color: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      min-height: 44px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      transition: border-color var(--transition), background-color var(--transition);
+    }
+
+    .example-chip:hover {
+      border-color: var(--ink);
+      background-color: var(--surface);
+    }
+
+    .example-chip-tag {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+    }
+
+    .example-chip-name {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    .annotated-container {
+      margin-top: 24px;
+      border-top: 1px solid var(--line);
+      padding-top: 20px;
+    }
+
+    .annotated-container[hidden] {
+      display: none;
+    }
+
+    .annotated-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .annotated-legend {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 0.75rem;
+      color: var(--ink-secondary);
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+
+    .legend-swatch.is-danger {
+      background-color: var(--vermilion-soft);
+      border: 1px solid var(--vermilion);
+    }
+
+    .legend-swatch.is-warn {
+      background-color: var(--amber-soft);
+      border: 1px solid var(--amber);
+    }
+
+    .annotated-box {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--bg);
+      font-size: 0.96875rem;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      word-break: break-word;
+      position: relative;
+    }
+
+    .lure-mark {
+      padding: 2px 4px;
+      margin: 0 -1px;
+      border-radius: 2px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background-color var(--transition), box-shadow var(--transition);
+      border-bottom: 2px solid transparent;
+    }
+
+    .lure-mark.severity-high {
+      background-color: var(--vermilion-soft);
+      color: var(--ink);
+      border-bottom-color: var(--vermilion);
+    }
+
+    .lure-mark.severity-medium {
+      background-color: var(--amber-soft);
+      color: var(--ink);
+      border-bottom-color: var(--amber);
+    }
+
+    .lure-mark:hover,
+    .lure-mark:focus,
+    .lure-mark.is-active {
+      box-shadow: 0 0 0 2px var(--ink);
+    }
+
+    /* Tooltip / Popover for active annotation */
+    .annotation-tooltip {
+      margin-top: 12px;
+      padding: 14px 16px;
+      background-color: var(--surface);
+      border: 1px solid var(--ink);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .annotation-tooltip[hidden] {
+      display: none;
+    }
+
+    .tooltip-meta {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+
+    .tooltip-meta.is-high { color: var(--vermilion); }
+    .tooltip-meta.is-medium { color: var(--amber); }
+
+    .tooltip-title {
+      font-weight: 600;
+      font-size: 0.9375rem;
+      margin-bottom: 2px;
+    }
+
+    .tooltip-desc {
+      font-size: 0.875rem;
+      color: var(--ink-secondary);
+    }
+
+    .breakdown-panel {
+      margin-top: 24px;
+      border-top: 1px solid var(--line);
+      padding-top: 20px;
+    }
+
+    .breakdown-panel[hidden] {
+      display: none;
+    }
+
+    .defang-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      background-color: var(--surface-subtle);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .defang-code {
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+      word-break: break-all;
+      color: var(--ink);
+    }
+
+    .anatomy-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+
+    .anatomy-cell {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--bg);
+    }
+
+    .anatomy-cell.is-emphasized {
+      border-color: var(--ink);
+      background-color: var(--surface);
+    }
+
+    .anatomy-key {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-muted);
+      margin-bottom: 4px;
+    }
+
+    .anatomy-val {
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      font-weight: 600;
+      word-break: break-all;
+      color: var(--ink);
+    }
+
+    .auth-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .auth-card {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--bg);
+    }
+
+    .auth-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .auth-proto {
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+      font-weight: 600;
+    }
+
+    .status-pill {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 2px;
+      border: 1px solid var(--line);
+    }
+
+    .status-pill.is-pass {
+      background-color: var(--sage-soft);
+      color: var(--sage);
+      border-color: var(--sage-border);
+    }
+
+    .status-pill.is-fail {
+      background-color: var(--vermilion-soft);
+      color: var(--vermilion);
+      border-color: var(--vermilion-border);
+    }
+
+    .status-pill.is-warn {
+      background-color: var(--amber-soft);
+      color: var(--amber);
+      border-color: var(--amber-border);
+    }
+
+    .hop-timeline {
+      list-style: none;
+      border-left: 2px solid var(--line-strong);
+      margin-left: 8px;
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .hop-item {
+      position: relative;
+      font-size: 0.8125rem;
+    }
+
+    .hop-item::before {
+      content: "";
+      position: absolute;
+      left: -23px;
+      top: 6px;
+      width: 8px;
+      height: 8px;
+      background-color: var(--ink);
+      border-radius: 1px;
+    }
+
+    .hop-step-title {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: var(--ink);
+      margin-bottom: 2px;
+    }
+
+    .hop-step-meta {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--ink-secondary);
+      word-break: break-all;
+    }
+
+    .results-column[hidden] {
+      display: none;
+    }
+
+    .result-card {
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-card);
+      padding: 28px;
+    }
+
+    .score-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .score-number-wrap {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .score-number {
+      font-family: var(--font-mono);
+      font-size: clamp(3rem, 6vw, 4.25rem);
+      font-weight: 600;
+      letter-spacing: -0.05em;
+      line-height: 1;
+    }
+
+    .score-max {
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      color: var(--ink-muted);
+    }
+
+    .verdict-badge {
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .verdict-badge.tier-safe {
+      background-color: var(--sage-soft);
+      color: var(--sage);
+      border-color: var(--sage-border);
+    }
+
+    .verdict-badge.tier-caution {
+      background-color: var(--amber-soft);
+      color: var(--amber);
+      border-color: var(--amber-border);
+    }
+
+    .verdict-badge.tier-phishing,
+    .verdict-badge.tier-danger {
+      background-color: var(--vermilion-soft);
+      color: var(--vermilion);
+      border-color: var(--vermilion-border);
+    }
+
+    .score-meter-track {
+      width: 100%;
+      height: 6px;
+      background-color: var(--surface-subtle);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .score-meter-fill {
+      height: 100%;
+      width: 0%;
+      transition: width 300ms cubic-bezier(0.16, 1, 0.3, 1), background-color 200ms ease;
+    }
+
+    .score-summary {
+      font-size: 0.96875rem;
+      color: var(--ink-secondary);
+      margin-bottom: 14px;
+    }
+
+    .disclaimer-line {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+      padding: 10px 12px;
+      background-color: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      margin-bottom: 24px;
+    }
+
+    .section-heading {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-secondary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .findings-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .finding-item {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--bg);
+      padding: 14px 16px;
+      transition: border-color var(--transition), background-color var(--transition);
+    }
+
+    .finding-item.is-linked {
+      cursor: pointer;
+    }
+
+    .finding-item:hover,
+    .finding-item.is-active {
+      border-color: var(--ink);
+      background-color: var(--surface);
+    }
+
+    .finding-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .finding-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .finding-weight {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 2px;
+    }
+
+    .finding-weight.is-high {
+      background-color: var(--vermilion-soft);
+      color: var(--vermilion);
+    }
+
+    .finding-weight.is-medium {
+      background-color: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .finding-weight.is-safe {
+      background-color: var(--sage-soft);
+      color: var(--sage);
+    }
+
+    .finding-title {
+      font-weight: 600;
+      font-size: 0.9375rem;
+      color: var(--ink);
+    }
+
+    .why-toggle-btn {
+      appearance: none;
+      background: none;
+      border: none;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--ink-secondary);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      cursor: pointer;
+      padding: 4px;
+      white-space: nowrap;
+    }
+
+    .why-toggle-btn:hover {
+      color: var(--ink);
+    }
+
+    .finding-details {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      font-size: 0.875rem;
+      color: var(--ink-secondary);
+      line-height: 1.55;
+    }
+
+    .finding-details[hidden] {
+      display: none;
+    }
+
+    .finding-matched-snippet {
+      margin-top: 6px;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--ink);
+      background-color: var(--surface-subtle);
+      padding: 4px 8px;
+      border-radius: 2px;
+      display: inline-block;
+      word-break: break-all;
+    }
+
+    .expander-block {
+      border-top: 1px solid var(--line);
+      padding-top: 16px;
+      margin-top: 16px;
+    }
+
+    .expander-trigger {
+      width: 100%;
+      appearance: none;
+      background: none;
+      border: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      min-height: 44px;
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .expander-content {
+      padding: 12px 0 4px;
+      font-size: 0.875rem;
+      color: var(--ink-secondary);
+    }
+
+    .expander-content[hidden] {
+      display: none;
+    }
+
+    .calc-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      margin-top: 8px;
+    }
+
+    .calc-table th,
+    .calc-table td {
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+
+    .calc-table th:last-child,
+    .calc-table td:last-child {
+      text-align: right;
+    }
+
+    .next-steps-card {
+      margin-top: 24px;
+      padding: 20px;
+      background-color: var(--surface-subtle);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .next-steps-list {
+      margin-top: 10px;
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 0.875rem;
+      color: var(--ink);
+    }
+
+    .report-actions {
+      margin-top: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .ai-input-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+
+    .ai-key-input {
+      flex: 1;
+      min-width: 200px;
+      padding: 8px 12px;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--bg);
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+    }
+
+    .ai-response-box {
+      margin-top: 12px;
+      padding: 14px;
+      background-color: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      color: var(--ink);
+    }
+
+    .quiz-section[hidden] {
+      display: none;
+    }
+
+    .quiz-card {
+      max-width: 780px;
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-card);
+      padding: 32px;
+    }
+
+    .quiz-progress-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+      margin-bottom: 16px;
+    }
+
+    .quiz-prompt-box {
+      padding: 20px;
+      background-color: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      margin-bottom: 20px;
+    }
+
+    .quiz-btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .quiz-choice-btn {
+      appearance: none;
+      padding: 14px 20px;
+      min-height: 52px;
+      border: 1px solid var(--line-strong);
+      background-color: var(--surface);
+      border-radius: var(--radius);
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color var(--transition), background-color var(--transition);
+    }
+
+    .quiz-choice-btn:hover:not(:disabled) {
+      border-color: var(--ink);
+      background-color: var(--surface-subtle);
+    }
+
+    .quiz-choice-btn:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    .quiz-feedback {
+      margin-top: 20px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background-color: var(--surface-subtle);
+    }
+
+    .selftest-banner {
+      margin-top: 24px;
+      padding: 16px 20px;
+      border: 1px solid var(--ink);
+      border-radius: var(--radius);
+      background-color: var(--surface);
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+    }
+
+    .selftest-banner[hidden] {
+      display: none;
+    }
+
+    .site-footer {
+      border-top: 1px solid var(--line);
+      padding: 28px 0;
+      font-size: 0.8125rem;
+      color: var(--ink-secondary);
+      background-color: var(--bg);
+    }
+
+    .footer-inner {
+      display: flex;
+       flex-direction: column;
+      gap: 10px;
+    }
+
+    @media (min-width: 768px) {
+      .footer-inner {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+      }
+    }
+
+    .footer-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: center;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand-group">
+        <button type="button" class="brand-wordmark" id="brandResetBtn" aria-label="Lure Home">
+          <span>Lure</span>
+          <span class="brand-dot" aria-hidden="true"></span>
+        </button>
+        <span class="brand-tagline">Spot the bait.</span>
+      </div>
+
+      <div class="nav-group">
+        <div class="tab-list" role="tablist" aria-label="Analysis Mode">
+          <button type="button" role="tab" class="tab-btn" id="tab-message" data-mode="message" aria-selected="true" aria-controls="workspace-panel">Message</button>
+          <button type="button" role="tab" class="tab-btn" id="tab-link" data-mode="link" aria-selected="false" aria-controls="workspace-panel">Link</button>
+          <button type="button" role="tab" class="tab-btn" id="tab-headers" data-mode="headers" aria-selected="false" aria-controls="workspace-panel">Headers</button>
+        </div>
+
+        <button type="button" class="quiz-trigger-btn" id="quizToggleBtn" aria-pressed="false">
+          <span>Spot the Lure</span>
+          <span class="quiz-badge">Quiz</span>
+        </button>
+      </div>
+    </div>
+    <div class="progress-bar-track" id="progressBarTrack" aria-hidden="true">
+      <div class="progress-bar-fill"></div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="analyzerView">
+      <div class="hero-header">
+        <div class="hero-eyebrow" id="modeEyebrow">MODE 01 // EMAIL &amp; SMS DETECTOR</div>
+        <h1 class="hero-headline">Is it a lure?</h1>
+        <p class="hero-subtitle" id="modeSubtitle">
+          Paste a suspicious email or SMS below. Lure inspects it locally in your browser, highlights manipulation tactics inline, and explains every signal in plain English.
+        </p>
+      </div>
+
+      <div class="workspace-grid" id="workspaceGrid">
+        <!-- Left Column: Input + Inline Annotated View / Breakdown -->
+        <div class="input-column" id="workspace-panel" role="tabpanel" aria-labelledby="tab-message">
+          <div class="input-card">
+            <div class="input-header">
+              <label for="mainInput" class="input-label" id="inputLabel">PASTE MESSAGE TEXT</label>
+              <div class="input-mode-toggle">
+                <button type="button" class="ghost-btn" id="clearInputBtn" hidden>Clear</button>
+              </div>
+            </div>
+
+            <textarea
+              id="mainInput"
+              class="lure-textarea"
+              placeholder="e.g. Dear customer, your SBI account will be suspended within 24 hours due to incomplete KYC. Update immediately at http://sbi-kyc-update.xyz..."
+              spellcheck="false"
+            ></textarea>
+
+            <div class="action-row">
+              <button type="button" class="primary-btn" id="analyzeBtn">
+                <span>Analyze</span>
+              </button>
+
+              <div class="secondary-links">
+                <button type="button" class="text-link-btn" id="tryExampleBtn" aria-expanded="false" aria-controls="examplesDrawer">
+                  Try an example
+                </button>
+              </div>
+            </div>
+
+            <!-- Built-in Examples Drawer -->
+            <div class="examples-drawer" id="examplesDrawer" hidden>
+              <div class="examples-title">Select a realistic test sample (auto-switches mode):</div>
+              <div class="examples-grid" id="examplesGrid"></div>
+            </div>
+
+            <!-- Signature Feature: Annotated Text Container (Message Mode) -->
+            <div class="annotated-container" id="annotatedContainer" hidden>
+              <div class="annotated-header">
+                <span class="input-label">ANNOTATED MESSAGE (TAP HIGHLIGHT FOR REASON)</span>
+                <div class="annotated-legend">
+                  <span class="legend-item"><span class="legend-swatch is-danger"></span> High risk</span>
+                  <span class="legend-item"><span class="legend-swatch is-warn"></span> Caution</span>
+                </div>
+              </div>
+              <div class="annotated-box" id="annotatedBox" aria-live="polite"></div>
+              <div class="annotation-tooltip" id="annotationTooltip" hidden>
+                <div>
+                  <div class="tooltip-meta" id="tooltipMeta"></div>
+                  <div class="tooltip-title" id="tooltipTitle"></div>
+                  <div class="tooltip-desc" id="tooltipDesc"></div>
+                </div>
+                <button type="button" class="ghost-btn" id="closeTooltipBtn" aria-label="Close highlight details">Close</button>
+              </div>
+            </div>
+
+            <!-- Link Anatomy Breakdown (Link Mode) -->
+            <div class="breakdown-panel" id="linkBreakdownPanel" hidden>
+              <div class="annotated-header">
+                <span class="input-label">DEFANGED URL (SAFE TO SHARE)</span>
+                <button type="button" class="ghost-btn" id="copyDefangedBtn">Copy defanged URL</button>
+              </div>
+              <div class="defang-box">
+                <code class="defang-code" id="defangedUrlCode"></code>
+              </div>
+
+              <div class="annotated-header">
+                <span class="input-label">URL ANATOMY BREAKDOWN</span>
+              </div>
+              <div class="anatomy-grid" id="urlAnatomyGrid"></div>
+            </div>
+
+            <!-- Email Headers Breakdown & Hop Timeline (Headers Mode) -->
+            <div class="breakdown-panel" id="headersBreakdownPanel" hidden>
+              <div class="annotated-header">
+                <span class="input-label">SENDER AUTHENTICATION (SPF / DKIM / DMARC)</span>
+              </div>
+              <div class="auth-grid" id="headerAuthGrid"></div>
+
+              <div class="annotated-header">
+                <span class="input-label">ADDRESS COMPARISON</span>
+              </div>
+              <div class="anatomy-grid" id="headerIdentityGrid" style="margin-bottom: 18px;"></div>
+
+              <div class="annotated-header">
+                <span class="input-label">RECEIVED HOP TIMELINE (ORIGIN TO INBOX)</span>
+              </div>
+              <ol class="hop-timeline" id="headerHopTimeline"></ol>
+            </div>
+          </div>
+        </div>
+
+        <aside class="results-column" id="resultsColumn" hidden aria-live="polite">
+          <div class="result-card">
+            <div class="input-label" style="margin-bottom: 8px;">RISK ASSESSMENT</div>
+            <div class="score-header">
+              <div class="score-number-wrap">
+                <span class="score-number" id="scoreValue">0</span>
+                <span class="score-max">/ 100</span>
+              </div>
+              <span class="verdict-badge tier-safe" id="verdictBadge">Looks safe</span>
+            </div>
+
+            <div class="score-meter-track" aria-hidden="true">
+              <div class="score-meter-fill" id="scoreMeterFill"></div>
+            </div>
+
+            <p class="score-summary" id="scoreSummary"></p>
+
+            <div class="disclaimer-line">
+              Lure uses rules, not magic. Always verify with the official source.
+            </div>
+
+            <!-- Findings List -->
+            <div class="section-heading">
+              <span>DETECTED SIGNALS (<span id="findingsCount">0</span>)</span>
+              <button type="button" class="why-toggle-btn" id="expandAllWhyBtn">Show all reasons</button>
+            </div>
+            <ul class="findings-list" id="findingsList"></ul>
+
+            <!-- Transparent Score Calculation Expander -->
+            <div class="expander-block">
+              <button type="button" class="expander-trigger" id="calcExpanderBtn" aria-expanded="false" aria-controls="calcExpanderContent">
+                <span>How this score is calculated</span>
+                <span id="calcExpanderIcon">+</span>
+              </button>
+              <div class="expander-content" id="calcExpanderContent" hidden>
+                <p>Each rule carries a fixed point weight based on how strongly it correlates with social engineering or technical spoofing. The total is capped at 100.</p>
+                <table class="calc-table">
+                  <thead>
+                    <tr>
+                      <th>Rule / Signal</th>
+                      <th>Category</th>
+                      <th>Points</th>
+                    </tr>
+                  </thead>
+                  <tbody id="calcTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- What To Do Next Card -->
+            <div class="next-steps-card">
+              <div class="input-label" id="nextStepsTitle">WHAT TO DO NEXT</div>
+              <ul class="next-steps-list" id="nextStepsList"></ul>
+            </div>
+
+            <!-- Copy Plain-Text Report -->
+            <div class="report-actions">
+              <button type="button" class="ghost-btn" id="copyReportBtn">Copy plain-text report</button>
+              <span id="copyReportFeedback" style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--sage);" aria-live="polite"></span>
+            </div>
+
+            <!-- Optional Ask AI Panel (Collapsed & Off by Default) -->
+            <div class="expander-block">
+              <button type="button" class="expander-trigger" id="aiExpanderBtn" aria-expanded="false" aria-controls="aiExpanderContent">
+                <span>Optional: Ask AI for a second opinion (Off by default)</span>
+                <span id="aiExpanderIcon">+</span>
+              </button>
+              <div class="expander-content" id="aiExpanderContent" hidden>
+                <p>
+                  Lure runs 100% offline by default. If you want an optional second opinion, paste your own Gemini API key below. Your key is stored <strong>only in temporary JavaScript memory</strong> (never in localStorage or cookies) and only the current input text is sent directly to Google's Gemini API when you click the button.
+                </p>
+                <div class="ai-input-row">
+                  <input
+                    type="password"
+                    id="geminiKeyInput"
+                    class="ai-key-input"
+                    placeholder="Paste your Gemini API key (AIza...)"
+                    autocomplete="off"
+                  >
+                  <button type="button" class="ghost-btn" id="askAiBtn">Ask Gemini</button>
+                  <button type="button" class="ghost-btn" id="clearAiKeyBtn">Forget key</button>
+                </div>
+                <div class="ai-response-box" id="aiResponseBox" hidden></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="quiz-section" id="quizView" hidden aria-labelledby="quizHeadline">
+      <div class="hero-header">
+        <div class="hero-eyebrow">INTERACTIVE TRAINING // 6 ROUNDS</div>
+        <h2 class="hero-headline" id="quizHeadline">Spot the Lure.</h2>
+        <p class="hero-subtitle">
+          Test your instincts on 6 realistic messages and links. After each choice, Lure runs its rule engine to show you the exact signals inside the text.
+        </p>
+      </div>
+
+      <div class="quiz-card">
+        <div class="quiz-progress-row">
+          <span id="quizRoundLabel">ROUND 1 OF 6</span>
+          <span id="quizScoreLabel">SCORE: 0 / 6</span>
+        </div>
+
+        <div class="quiz-prompt-box" id="quizPromptBox"></div>
+
+        <div class="quiz-btn-row" id="quizChoiceRow">
+          <button type="button" class="quiz-choice-btn" id="quizSafeBtn">Looks Safe</button>
+          <button type="button" class="quiz-choice-btn" id="quizPhishBtn" style="border-color: var(--vermilion); color: var(--vermilion);">Phishing Lure</button>
+        </div>
+
+        <div class="quiz-feedback" id="quizFeedbackBox" hidden>
+          <div style="font-family: var(--font-display); font-weight: 700; font-size: 1.125rem; margin-bottom: 6px;" id="quizFeedbackTitle"></div>
+          <p style="font-size: 0.9rem; color: var(--ink-secondary); margin-bottom: 12px;" id="quizFeedbackExplain"></p>
+          <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--ink); margin-bottom: 14px;" id="quizEngineSignals"></div>
+          <button type="button" class="primary-btn" id="quizNextBtn">Next round</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Self-Test Output Banner (#selftest) -->
+    <div class="selftest-banner" id="selftestBanner" hidden></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div>
+        <strong>Built by Tanay Mathur, B.Tech CSE</strong> &mdash; Educational tool. Not a replacement for official verification.
+      </div>
+      <div class="footer-meta">
+        <span><strong>Privacy:</strong> Everything is analyzed locally in your browser. Nothing is uploaded, logged, or stored.</span>
+        <a href="#selftest" id="runSelftestLink" style="color: var(--ink-secondary); font-family: var(--font-mono); font-size: 0.75rem;">#selftest</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      'use strict';
+
+      /**
+       * ============================================================================
+       * 1. RULES & KNOWLEDGE BASE DATA OBJECT
+       * All detection rules, brand domains, TLDs, and samples live here at the top
+       * so new rules can be audited or added in one place.
+       * ============================================================================
+       */
+      const LURE_DATA = {
+        // 68 Popular Global & Indian Brands/Banks/Institutions with their official registrable domains
+        knownBrands: [
+          { name: 'SBI / State Bank of India', tokens: ['sbi', 'onlinesbi', 'sbicard', 'statebankofindia', 'yonosbi'], domains: ['sbi.co.in', 'onlinesbi.sbi', 'sbicard.com', 'sbi.bank.in'] },
+          { name: 'HDFC Bank', tokens: ['hdfc', 'hdfcbank', 'hdfclife'], domains: ['hdfcbank.com', 'hdfc.com', 'hdfclife.com'] },
+          { name: 'ICICI Bank', tokens: ['icici', 'icicibank', 'icicidirect'], domains: ['icicibank.com', 'icicidirect.com'] },
+          { name: 'Axis Bank', tokens: ['axisbank', 'axisdirect'], domains: ['axisbank.com', 'axisdirect.in'] },
+          { name: 'Kotak Mahindra Bank', tokens: ['kotak', 'kotakbank'], domains: ['kotak.com', 'kotakbank.com'] },
+          { name: 'Punjab National Bank', tokens: ['pnb', 'pnbindia', 'netpnb'], domains: ['pnbindia.in', 'netpnb.com'] },
+          { name: 'Bank of Baroda', tokens: ['bankofbaroda', 'bobibanking'], domains: ['bankofbaroda.in', 'bobibanking.com'] },
+          { name: 'Canara Bank', tokens: ['canarabank'], domains: ['canarabank.com', 'canarabank.in'] },
+          { name: 'IndusInd Bank', tokens: ['indusind', 'indusnet'], domains: ['indusind.com'] },
+          { name: 'Yes Bank', tokens: ['yesbank'], domains: ['yesbank.in'] },
+          { name: 'IDFC FIRST Bank', tokens: ['idfcfirstbank', 'idfcfirst'], domains: ['idfcfirstbank.com'] },
+          { name: 'Union Bank of India', tokens: ['unionbankofindia'], domains: ['unionbankofindia.co.in'] },
+          { name: 'Paytm', tokens: ['paytm', 'paytmbank'], domains: ['paytm.com', 'paytmbank.com'] },
+          { name: 'PhonePe', tokens: ['phonepe'], domains: ['phonepe.com'] },
+          { name: 'Google Pay / Google', tokens: ['google', 'googlepay', 'gpay', 'gmail'], domains: ['google.com', 'google.co.in', 'gmail.com', 'withgoogle.com'] },
+          { name: 'BharatPe', tokens: ['bharatpe'], domains: ['bharatpe.com'] },
+          { name: 'Razorpay', tokens: ['razorpay'], domains: ['razorpay.com'] },
+          { name: 'CRED', tokens: ['credclub'], domains: ['cred.club'] },
+          { name: 'Zerodha', tokens: ['zerodha', 'kitezerodha'], domains: ['zerodha.com'] },
+          { name: 'Groww', tokens: ['groww'], domains: ['groww.in'] },
+          { name: 'Upstox', tokens: ['upstox'], domains: ['upstox.com'] },
+          { name: 'UIDAI / Aadhaar', tokens: ['uidai', 'aadhaar', 'myaadhaar'], domains: ['uidai.gov.in'] },
+          { name: 'Income Tax India', tokens: ['incometax', 'incometaxindia'], domains: ['incometax.gov.in', 'incometaxindia.gov.in'] },
+          { name: 'Parivahan / eChallan', tokens: ['parivahan', 'echallan'], domains: ['parivahan.gov.in'] },
+          { name: 'DigiLocker', tokens: ['digilocker'], domains: ['digilocker.gov.in'] },
+          { name: 'EPFO', tokens: ['epfindia', 'epfo'], domains: ['epfindia.gov.in'] },
+          { name: 'India Post', tokens: ['indiapost'], domains: ['indiapost.gov.in'] },
+          { name: 'IRCTC', tokens: ['irctc'], domains: ['irctc.co.in'] },
+          { name: 'NPCI /BHIM UPI', tokens: ['npci', 'bhimupi'], domains: ['npci.org.in', 'bhimupi.org.in'] },
+          { name: 'Reserve Bank of India', tokens: ['rbi', 'reservebankofindia'], domains: ['rbi.org.in'] },
+          { name: 'Flipkart', tokens: ['flipkart'], domains: ['flipkart.com'] },
+          { name: 'Amazon', tokens: ['amazon', 'amazonin', 'amzn'], domains: ['amazon.com', 'amazon.in', 'amzn.to', 'amzn.in'] },
+          { name: 'Myntra', tokens: ['myntra'], domains: ['myntra.com'] },
+          { name: 'Meesho', tokens: ['meesho'], domains: ['meesho.com'] },
+          { name: 'Nykaa', tokens: ['nykaa'], domains: ['nykaa.com'] },
+          { name: 'Swiggy', tokens: ['swiggy'], domains: ['swiggy.com'] },
+          { name: 'Zomato', tokens: ['zomato'], domains: ['zomato.com'] },
+          { name: 'Blinkit', tokens: ['blinkit'], domains: ['blinkit.com'] },
+          { name: 'Zepto', tokens: ['zeptonow', 'zepto'], domains: ['zeptonow.com'] },
+          { name: 'BigBasket', tokens: ['bigbasket'], domains: ['bigbasket.com'] },
+          { name: 'MakeMyTrip', tokens: ['makemytrip'], domains: ['makemytrip.com'] },
+          { name: 'IndiGo Airlines', tokens: ['goindigo'], domains: ['goindigo.in'] },
+          { name: 'Air India', tokens: ['airindia'], domains: ['airindia.com'] },
+          { name: 'Delhivery', tokens: ['delhivery'], domains: ['delhivery.com'] },
+          { name: 'Blue Dart', tokens: ['bluedart'], domains: ['bluedart.com'] },
+          { name: 'DHL', tokens: ['dhl'], domains: ['dhl.com', 'dhl.de'] },
+          { name: 'FedEx', tokens: ['fedex'], domains: ['fedex.com'] },
+          { name: 'Jio', tokens: ['jio', 'myjio'], domains: ['jio.com'] },
+          { name: 'Airtel', tokens: ['airtel'], domains: ['airtel.in', 'airtel.com'] },
+          { name: 'BSNL', tokens: ['bsnl'], domains: ['bsnl.co.in'] },
+          { name: 'Microsoft', tokens: ['microsoft', 'office365', 'outlook', 'onedrive'], domains: ['microsoft.com', 'office.com', 'live.com', 'outlook.com', '1drv.ms'] },
+          { name: 'Apple', tokens: ['apple', 'icloud', 'appleid'], domains: ['apple.com', 'icloud.com'] },
+          { name: 'Meta / Facebook', tokens: ['facebook', 'instagram', 'whatsapp', 'meta'], domains: ['facebook.com', 'instagram.com', 'whatsapp.com', 'meta.com', 'fb.com'] },
+          { name: 'Netflix', tokens: ['netflix'], domains: ['netflix.com'] },
+          { name: 'Spotify', tokens: ['spotify'], domains: ['spotify.com'] },
+          { name: 'PayPal', tokens: ['paypal'], domains: ['paypal.com', 'paypal.me'] },
+          { name: 'Stripe', tokens: ['stripe'], domains: ['stripe.com'] },
+          { name: 'Wise', tokens: ['wise', 'transferwise'], domains: ['wise.com'] },
+          { name: 'Binance', tokens: ['binance'], domains: ['binance.com'] },
+          { name: 'Coinbase', tokens: ['coinbase'], domains: ['coinbase.com'] },
+          { name: 'LinkedIn', tokens: ['linkedin'], domains: ['linkedin.com', 'lnkd.in'] },
+          { name: 'GitHub', tokens: ['github'], domains: ['github.com', 'github.io'] },
+          { name: 'Dropbox', tokens: ['dropbox'], domains: ['dropbox.com'] },
+          { name: 'Adobe', tokens: ['adobe'], domains: ['adobe.com'] },
+          { name: 'Zoom', tokens: ['zoom'], domains: ['zoom.us', 'zoom.com'] },
+          { name: 'Slack', tokens: ['slack'], domains: ['slack.com'] },
+          { name: 'Steam', tokens: ['steampowered', 'steamcommunity'], domains: ['steampowered.com', 'steamcommunity.com'] },
+          { name: 'Discord', tokens: ['discord', 'discordapp'], domains: ['discord.com', 'discord.gg', 'discordapp.com'] }
+        ],
+
+        // High-risk or commonly abused TLDs in phishing campaigns
+        suspiciousTlds: new Set([
+          'zip', 'mov', 'xyz', 'top', 'click', 'tk', 'ml', 'ga', 'cf', 'gq',
+          'work', 'loan', 'kim', 'country', 'stream', 'download', 'xin', 'gdn',
+          'racing', 'jetzt', 'vip', 'icu', 'buzz', 'rest', 'fit', 'sbs', 'cfd',
+          'quest', 'cyou', 'monster', 'shop', 'live', 'online', 'site', 'fun'
+        ]),
+
+        // Common URL shorteners that hide destination domains
+        urlShorteners: new Set([
+          'bit.ly', 'tinyurl.com', 't.co', 'rb.gy', 'cutt.ly', 'is.gd', 'v.gd',
+          'shorturl.at', 'tiny.cc', 'ow.ly', 'rebrand.ly', 'bl.ink', 'buff.ly', 's.id'
+        ]),
+
+        // Multi-part country-code second-level domains for accurate registrable domain extraction
+        multiPartTlds: new Set([
+          'co.in', 'gov.in', 'org.in', 'ac.in', 'net.in', 'res.in', 'gen.in', 'firm.in', 'bank.in',
+          'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'co.jp', 'co.nz', 'co.za', 'com.br', 'com.sg'
+        ]),
+
+        // Message Detection Rules (Weighted + Regex with /gi for exact span highlighting)
+        messageRules: [
+          {
+            id: 'MSG_URGENCY',
+            category: 'Urgency & Pressure',
+            title: 'Artificial time pressure or urgency',
+            weight: 18,
+            severity: 'medium',
+            explanation: 'Attackers manufacture panic so you act before verifying. Legitimate institutions rarely give 24-hour ultimatums via SMS or email links.',
+            patterns: [
+              /\b(?:act\s+now|immediate(?:ly)?\s+action|within\s+\d+\s*(?:hours?|hrs?|minutes?|mins?)|expires?\s+(?:today|tonight|in\s+\d+\s*hours?)|urgent\s+(?:notice|attention|action|update)|final\s+(?:notice|warning|reminder)|last\s+chance|do\s+it\s+immediately|avoid\s+suspension)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_THREATS',
+            category: 'Threats & Fear',
+            title: 'Account freeze, suspension, or legal threat',
+            weight: 22,
+            severity: 'high',
+            explanation: 'Threatening account suspension, police action, or service disconnection is a classic manipulation tactic designed to bypass critical thinking.',
+            patterns: [
+              /\b(?:account\s+(?:has\s+been\s+|will\s+be\s+)?(?:suspended|blocked|frozen|deactivated|restricted|locked|terminated)|legal\s+action|unauthorized\s+(?:login|access|transaction)|permanently\s+(?:closed|blocked)|police\s+complaint|cyber\s+warrant|service\s+will\s+be\s+disconnected)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_CREDENTIALS',
+            category: 'Credential Harvesting',
+            title: 'Request for OTP, PIN, password, or sensitive ID',
+            weight: 30,
+            severity: 'high',
+            explanation: 'No bank, UPI app, or government agency will ever ask you to reply with or enter your OTP, UPI PIN, CVV, full card number, or password via an external link.',
+            patterns: [
+              /\b(?:(?:share|enter|verify|confirm|submit|provide|input)\s+(?:your\s+)?(?:otp|one[\s-]time\s+password|upi\s+pin|mpin|atm\s+pin|cvv|card\s+number|netbanking\s+password|login\s+credentials|aadhaar\s+number|pan\s+number)|otp\s+to\s+(?:verify|cancel|claim)|never\s+share\s+otp\s+unless)\b/gi,
+              /\b(?:upi\s+pin|cvv\s+code|6[\s-]digit\s+otp|4[\s-]digit\s+pin)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_MONEY_BAIT',
+            category: 'Money Bait',
+            title: 'Too-good-to-be-true prize, refund, or cashback lure',
+            weight: 22,
+            severity: 'high',
+            explanation: 'Promises of unexpected lottery winnings, tax refunds, crypto giveaways, or instant cashback lures are used to trick you into paying a fee or approving a UPI collect request.',
+            patterns: [
+              /\b(?:you\s+have\s+won|lucky\s+(?:draw|winner)|unclaimed\s+(?:reward|prize|refund)|crypto\s+giveaway|instant\s+cashback\s+of\s+(?:rs\.?|inr|₹)?\s*\d+|claim\s+your\s+(?:free|prize|refund|bonus|reward)|lottery\s+prize|income\s+tax\s+refund\s+approved)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_GENERIC_GREETING',
+            category: 'Generic Greeting',
+            title: 'Impersonal greeting ("Dear customer / user")',
+            weight: 10,
+            severity: 'medium',
+            explanation: 'Mass phishing campaigns often use generic greetings like "Dear Customer" or "Dear User" because they do not know your real registered name.',
+            patterns: [
+              /\b(?:dear\s+(?:valued\s+)?(?:customer|user|member|account\s+holder|client|beneficiary)|hello\s+dear\s+user)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_INDIA_KYC_BANK',
+            category: 'Indian-Context Scam',
+            title: 'Fake Bank / PAN / Aadhaar KYC expiry lure',
+            weight: 26,
+            severity: 'high',
+            explanation: 'In India, scammers frequently send SMS claiming your SBI/HDFC/Paytm KYC or PAN-Aadhaar link has expired. Banks never ask you to update KYC via an SMS link or personal phone number.',
+            patterns: [
+              /\b(?:kyc\s+(?:is\s+|has\s+)?(?:expired|incomplete|pending|update\s+immediately|verification\s+required)|update\s+(?:your\s+)?(?:pan|aadhaar|bank)\s+kyc|pan\s+card\s+(?:will\s+be\s+)?(?:blocked|inoperative)|complete\s+re[\s-]kyc)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_INDIA_ELECTRICITY',
+            category: 'Indian-Context Scam',
+            title: 'Electricity bill tonight-disconnection scam',
+            weight: 28,
+            severity: 'high',
+            explanation: 'A widespread Indian scam warns that your electricity power will be disconnected tonight at 9:30 PM because last month\'s bill wasn\'t updated, urging you to call a personal mobile number.',
+            patterns: [
+              /\b(?:electricity\s+(?:power\s+)?(?:will\s+be\s+)?disconnected\s+tonight|power\s+supply\s+will\s+be\s+cut|previous\s+month\s+bill\s+was\s+not\s+updated|contact\s+electricity\s+officer)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_INDIA_COURIER',
+            category: 'Indian-Context Scam',
+            title: 'Fake India Post / Customs / Courier address fee',
+            weight: 25,
+            severity: 'high',
+            explanation: 'Scammers impersonate India Post, Delhivery, or Customs claiming a parcel is stuck due to an "incomplete address" or unpaid customs fee, directing you to a fake payment page.',
+            patterns: [
+              /\b(?:parcel\s+(?:has\s+been\s+|is\s+)?(?:held|on\s+hold|returned|detained)|incomplete\s+delivery\s+address|update\s+delivery\s+address\s+within|customs\s+(?:clearance|duty)\s+fee|india\s+post\s*:\s*your\s+package)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_INDIA_JOB_UPI',
+            category: 'Indian-Context Scam',
+            title: 'Part-time WFH / YouTube / Telegram task or UPI scam',
+            weight: 25,
+            severity: 'high',
+            explanation: 'Fake job scams offer easy daily payouts (₹3,000–₹8,000/day) for liking YouTube videos, rating Google Maps places, or joining Telegram VIP task groups before stealing deposits.',
+            patterns: [
+              /\b(?:earn\s+(?:rs\.?|inr|₹)?\s*\d{3,6}\s*(?:per\s+day|daily|\/day)|part[\s-]time\s+work\s+from\s+home|like\s+youtube\s+videos|rate\s+google\s+maps|telegram\s+(?:receptionist|task|vip\s+group)|enter\s+upi\s+pin\s+to\s+receive)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_RISKY_ATTACHMENT',
+            category: 'Malicious Attachment',
+            title: 'Reference to risky or executable attachment format',
+            weight: 26,
+            severity: 'high',
+            explanation: 'Attackers disguise malware or fake login forms inside .html, .zip, .iso, .exe, .scr, or double-extension files like "invoice.pdf.exe".',
+            patterns: [
+              /\b[\w-]+\.(?:pdf|doc|docx|xls|xlsx|jpg|png)\.(?:exe|scr|js|vbs|bat|cmd|html|htm|iso|zip)\b/gi,
+              /\b(?:attached|open|download)\s+[\w\s-]{0,20}\.(?:exe|scr|iso|img|vbs|bat|js|html|htm|zip|rar)\b/gi,
+              /\b[\w-]+\.(?:exe|scr|iso|vbs|bat|cmd)\b/gi
+            ]
+          },
+          {
+            id: 'MSG_GRAMMAR_PUNCT',
+            category: 'Formatting Anomaly',
+            title: 'Excessive punctuation or high-pressure formatting',
+            weight: 10,
+            severity: 'medium',
+            explanation: 'Multiple exclamation marks (!!!), erratic symbol clusters, or forced phrases like "kindly do the needful immediately" often appear in scam templates.',
+            patterns: [
+              /[!]{2,}|\?[?!]{2,}|\${3,}/g,
+              /\b(?:kindly\s+do\s+the\s+needful\s+immediately|failure\s+to\s+do\s+so\s+will\s+result)\b/gi
+            ]
+          }
+        ],
+
+        // 10 Built-in Realistic Examples for instant testing
+        examples: [
+          {
+            id: 'ex-sbi-kyc',
+            mode: 'message',
+            tag: 'SMS // India Bank Scam',
+            name: 'Fake SBI KYC Expiry SMS',
+            content: 'Dear Customer, Your SBI YONO Account will be suspended today within 24 hours as your PAN Card KYC is incomplete. Kindly update your KYC immediately at http://sbi-yono-kyc-update.xyz/login and enter your OTP to avoid account freeze!'
+          },
+          {
+            id: 'ex-indiapost',
+            mode: 'message',
+            tag: 'SMS // Courier Scam',
+            name: 'India Post Parcel Address Fee',
+            content: 'India Post: Your package #IN84920194 has arrived at the warehouse but cannot be delivered due to an incomplete delivery address. Please update delivery address within 12 hours and pay Rs. 25 re-shipping fee here: https://indiapost-tracking.top/parcel!!'
+          },
+          {
+            id: 'ex-electricity',
+            mode: 'message',
+            tag: 'SMS // Utility Scam',
+            name: 'Electricity Disconnection Tonight',
+            content: 'Dear Consumer, Your Electricity power will be disconnected tonight at 9:30 PM from electricity office because your previous month bill was not updated. Please immediately contact electricity officer Mr. Sharma at 9800012345 or download bill_receipt.pdf.exe.'
+          },
+          {
+            id: 'ex-job-telegram',
+            mode: 'message',
+            tag: 'WhatsApp // Job Scam',
+            name: 'Fake YouTube / Telegram WFH Job',
+            content: 'Hello Dear User! Part-time work from home opportunity with Amazon India. Simply like YouTube videos and earn ₹5000 per day easily! Claim your free Rs 150 joining bonus now by contacting our Telegram receptionist at http://bit.ly/wfh-task-bonus'
+          },
+          {
+            id: 'ex-ms-reset',
+            mode: 'message',
+            tag: 'Email // Brand Spoof',
+            name: 'Microsoft 365 Password & Attachment Scam',
+            content: 'Dear User,\n\nWe detected an unauthorized login attempt on your Microsoft 365 account. Your account has been restricted. To prevent permanent closure, open the attached file invoice_security_check.pdf.html and confirm your login credentials within 2 hours.\n\nVerify here: http://microsoft.account-verify-portal.click/auth'
+          },
+          {
+            id: 'ex-safe-message',
+            mode: 'message',
+            tag: 'Email // Safe Message',
+            name: 'Legitimate Team Release Note (Safe)',
+            content: 'Hi Tanay,\n\nHere are the deployment notes for yesterday\'s frontend sprint. All unit tests passed on staging and the typography spacing fixes are live. Let me know if we should review the accessibility audit during tomorrow\'s 11:00 AM standup.\n\nThanks,\nRohan'
+          },
+          {
+            id: 'ex-bad-url',
+            mode: 'link',
+            tag: 'Link // Homoglyph & Brand Spoof',
+            name: 'Lookalike Microsoft / SBI Phishing Link',
+            content: 'http://sbi-online.rnicrosoft-support.xyz/kyc-verify/login?session=8923&token=confirm'
+          },
+          {
+            id: 'ex-safe-url',
+            mode: 'link',
+            tag: 'Link // Legitimate URL',
+            name: 'Official SBI Portal Link (Safe)',
+            content: 'https://www.onlinesbi.sbi/sbijava/retail/html/faq.html'
+          },
+          {
+            id: 'ex-bad-headers',
+            mode: 'headers',
+            tag: 'Headers // Spoofed Sender',
+            name: 'Failed SPF/DMARC + Reply-To Mismatch',
+            content: [
+              'Return-Path: <bounce-9921@bulk-mailer-promo.xyz>',
+              'Received: from mx.google.com (mx.google.com [142.250.10.27]) by inbox.example.com with ESMTPS; Wed, 21 Oct 2026 09:14:22 +0530',
+              'Received: from unknown-vps.host.ru (unknown-vps.host.ru [185.220.101.44]) by mx.google.com with ESMTP; Wed, 21 Oct 2026 09:14:19 +0530',
+              'Authentication-Results: mx.google.com; spf=fail (google.com: domain of security@hdfcbank.com does not designate 185.220.101.44 as permitted sender) smtp.mailfrom=bounce-9921@bulk-mailer-promo.xyz; dkim=fail; dmarc=fail (p=REJECT dis=NONE) header.from=hdfcbank.com',
+              'From: "HDFC Bank Security Alert" <security@hdfcbank.com>',
+              'Reply-To: "KYC Verification Desk" <verify-kyc-now@outlook-free-mail.top>',
+              'Subject: URGENT: Your HDFC Account is Blocked - Action Required',
+              'Date: Wed, 21 Oct 2026 09:14:15 +0530'
+            ].join('\n')
+          },
+          {
+            id: 'ex-safe-headers',
+            mode: 'headers',
+            tag: 'Headers // Authentic Sender',
+            name: 'Authenticated GitHub Notification Headers (Safe)',
+            content: [
+              'Return-Path: <noreply@github.com>',
+              'Received: from mx.google.com (mx.google.com [142.250.11.88]) by work.example.com with ESMTPS; Wed, 21 Oct 2026 08:30:10 +0530',
+              'Received: from out-21.smtp.github.com (out-21.smtp.github.com [192.30.252.204]) by mx.google.com with ESMTPS; Wed, 21 Oct 2026 08:30:08 +0530',
+              'Authentication-Results: mx.google.com; spf=pass (google.com: domain of noreply@github.com designates 192.30.252.204 as permitted sender) smtp.mailfrom=noreply@github.com; dkim=pass header.i=@github.com; dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=github.com',
+              'From: "GitHub" <noreply@github.com>',
+              'Reply-To: "GitHub" <noreply@github.com>',
+              'Subject: [lure-app] Pull request #14 merged',
+              'Date: Wed, 21 Oct 2026 08:30:05 +0530'
+            ].join('\n')
+          }
+        ],
+
+        // 6 Quiz Items for "Spot the Lure"
+        quizQuestions: [
+          {
+            mode: 'message',
+            isPhishing: true,
+            prompt: 'Dear Customer, Your HDFC Bank NetBanking will be blocked today because your PAN KYC is expired. Click http://hdfcbank-rekyc.xyz/update immediately and enter OTP to keep your account active.',
+            explanation: 'Classic Indian bank KYC lure: combines a generic greeting ("Dear Customer"), artificial 24-hour urgency, account-block threat, OTP harvesting, and a fake ".xyz" domain pretending to be HDFC Bank.'
+          },
+          {
+            mode: 'link',
+            isPhishing: true,
+            prompt: 'https://paytm-cashback.secure-claim-portal.top/verify?upi=true',
+            explanation: 'Although "paytm" appears at the beginning, it is only a subdomain. The actual registrable domain is "secure-claim-portal.top" on an abused ".top" TLD.'
+          },
+          {
+            mode: 'message',
+            isPhishing: false,
+            prompt: 'Your Blue Dart shipment #BD904182 is out for delivery today with our courier executive. No online payment or link click is required. Please keep your doorstep delivery code ready if applicable.',
+            explanation: 'This notification does not include any suspicious links, does not demand an extra address fee, and does not create panic or ask for financial credentials.'
+          },
+          {
+            mode: 'message',
+            isPhishing: true,
+            prompt: 'Congratulations! You have won a Cashback Reward of ₹4,999 on PhonePe! Open your app and enter your 4-digit UPI PIN on the collect request to receive ₹4,999 directly in your bank account.',
+            explanation: 'UPI Collect Scam: You NEVER need to enter your UPI PIN to receive money. Entering your UPI PIN only authorizes money leaving your bank account.'
+          },
+          {
+            mode: 'link',
+            isPhishing: false,
+            prompt: 'https://uidai.gov.in/en/my-aadhaar/about-your-aadhaar.html',
+            explanation: 'This URL uses encrypted HTTPS and its real registrable domain is "uidai.gov.in", the official Indian government domain for Aadhaar.'
+          },
+          {
+            mode: 'message',
+            isPhishing: true,
+            prompt: 'Dear User, Please find attached your overdue GST tax challan in GST_Invoice_Oct.pdf.exe. Failure to remit within 24 hours will result in legal action!!',
+            explanation: 'Uses a dangerous double extension (".pdf.exe") designed to run malware on Windows while pretending to be a PDF, paired with legal threats and excessive punctuation.'
+          }
+        ]
+      };
+
+      /**
+       * ============================================================================
+       * 2. TOKENIZER, STRING UTILITIES & TYPOSQUATTING COMPARATOR
+       * ============================================================================
+       */
+      function escapeHtml(raw) {
+        const str = String(raw ?? '');
+        return str
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      // Homoglyph skeleton normalizer for common lookalike character swaps
+      function normalizeLookalikes(str) {
+        return String(str || '')
+          .toLowerCase()
+          .replace(/rn/g, 'm')
+          .replace(/vv/g, 'w')
+          .replace(/cl/g, 'd')
+          .replace(/[0]/g, 'o')
+          .replace(/[1l|!]/g, 'i')
+          .replace(/[5$]/g, 's')
+          .replace(/[@]/g, 'a')
+          .replace(/[^a-z0-9]/g, '');
+      }
+
+      // Standard Levenshtein edit distance between two strings
+      function levenshteinDistance(a, b) {
+        const s1 = a.toLowerCase();
+        const s2 = b.toLowerCase();
+        const m = s1.length;
+        const n = s2.length;
+        if (m === 0) return n;
+        if (n === 0) return m;
+
+        const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+        for (let i = 0; i <= m; i++) dp[i][0] = i;
+        for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+        for (let i = 1; i <= m; i++) {
+          for (let j = 1; j <= n; j++) {
+            const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+            dp[i][j] = Math.min(
+              dp[i - 1][j] + 1,      // deletion
+              dp[i][j - 1] + 1,      // insertion
+              dp[i - 1][j - 1] + cost // substitution
+            );
+          }
+        }
+        return dp[m][n];
+      }
+
+      // Extracts the registrable domain (e.g. "onlinesbi.sbi" or "sbi.co.in") from a hostname
+      function getRegistrableDomain(hostname) {
+        const cleanHost = String(hostname || '').toLowerCase().replace(/\.$/, '');
+        if (!cleanHost) return '';
+        // Check if IPv4 or IPv6
+        if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(cleanHost) || cleanHost.includes(':')) {
+          return cleanHost;
+        }
+        const parts = cleanHost.split('.');
+        if (parts.length <= 2) return cleanHost;
+        const lastTwo = parts.slice(-2).join('.');
+        if (LURE_DATA.multiPartTlds.has(lastTwo) && parts.length >= 3) {
+          return parts.slice(-3).join('.');
+        }
+        return lastTwo;
+      }
+
+      // Defangs any URL so it cannot be accidentally clicked when shared
+      function defangUrl(rawUrl) {
+        return String(rawUrl || '')
+          .trim()
+          .replace(/^http:\/\//i, 'hxxp://')
+          .replace(/^https:\/\//i, 'hxxps://')
+          .replace(/\./g, '[.]');
+      }
+
+      /**
+       * ============================================================================
+       * 3. URL ANALYZER MODULE
+       * Inspects structure, IP usage, @ trick, Punycode/IDN, typosquatting,
+       * subdomain brand traps, suspicious TLDs, shorteners, and HTTP vs HTTPS.
+       * ============================================================================
+       */
+      function analyzeUrlInput(rawInput) {
+        const trimmed = String(rawInput || '').trim();
+        const signals = [];
+        const defanged = defangUrl(trimmed);
+
+        if (!trimmed) {
+          return {
+            valid: false,
+            raw: trimmed,
+            defanged: '',
+            anatomy: null,
+            signals: [],
+            score: 0
+          };
+        }
+
+        // Check for @ trick in authority before URL parsing normalizes it
+        const hasAtSymbolInAuthority = /^(?:https?:\/\/)?[^/?#]+@[^/?#]+/i.test(trimmed);
+
+        let urlToParse = trimmed;
+        let hadExplicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+        if (!hadExplicitScheme) {
+          urlToParse = 'http://' + trimmed;
+        }
+
+        let parsed;
+        try {
+          parsed = new URL(urlToParse);
+        } catch (err) {
+          signals.push({
+            id: 'URL_MALFORMED',
+            category: 'URL Structure',
+            title: 'Malformed or unparseable URL syntax',
+            weight: 20,
+            severity: 'medium',
+            explanation: 'This string could not be parsed as a standard web address. Attackers sometimes obfuscate URLs with unusual formatting.',
+            snippet: trimmed.slice(0, 80)
+          });
+          return {
+            valid: false,
+            raw: trimmed,
+            defanged,
+            anatomy: null,
+            signals,
+            score: calculateScoreFromSignals(signals).score
+          };
+        }
+
+        const protocol = hadExplicitScheme ? parsed.protocol.replace(':', '').toLowerCase() : '(missing — defaults to http)';
+        const hostname = parsed.hostname.toLowerCase();
+        const registrableDomain = getRegistrableDomain(hostname);
+        const tld = hostname.includes('.') ? hostname.split('.').pop() : '';
+        const subdomainPart = hostname.endsWith(registrableDomain) && hostname.length > registrableDomain.length
+          ? hostname.slice(0, hostname.length - registrableDomain.length - 1)
+          : '';
+
+        const anatomy = {
+          protocol,
+          subdomains: subdomainPart || '(none)',
+          registrableDomain: registrableDomain || hostname,
+          path: parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '/',
+          query: parsed.search ? parsed.search : '(none)'
+        };
+
+        // 1. Raw IP address instead of domain name
+        const isIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+        const isIpv6 = hostname.startsWith('[') || hostname.includes(':');
+        if (isIpv4 || isIpv6) {
+          signals.push({
+            id: 'URL_RAW_IP',
+            category: 'Host Identity',
+            title: 'Uses raw IP address instead of a domain name',
+            weight: 35,
+            severity: 'high',
+            explanation: 'Legitimate consumer banks and services almost never send you to a raw numeric IP address (like 192.0.2.1) to log in.',
+            snippet: hostname
+          });
+        }
+
+        // 2. "@" symbol credential trick in URL authority
+        if (hasAtSymbolInAuthority || parsed.username || parsed.password) {
+          signals.push({
+            id: 'URL_AT_TRICK',
+            category: 'URL Obfuscation',
+            title: 'Contains "@" authority redirection trick',
+            weight: 38,
+            severity: 'high',
+            explanation: 'Everything before the "@" symbol in a URL is treated as a username and ignored for routing. For example, "https://google.com@evil.xyz" actually opens "evil.xyz".',
+            snippet: trimmed.slice(0, 90)
+          });
+        }
+
+        // 3. Punycode / IDN Homograph (xn--) or non-ASCII mixed script in raw input
+        const hasNonAsciiHost = /[^\x00-\x7F]/.test(trimmed.split('/')[2] || trimmed);
+        if (hostname.includes('xn--') || hasNonAsciiHost) {
+          signals.push({
+            id: 'URL_PUNYCODE_HOMOGRAPH',
+            category: 'IDN Homograph',
+            title: 'Punycode (xn--) or international lookalike characters detected',
+            weight: 35,
+            severity: 'high',
+            explanation: 'Attackers register domains with Cyrillic or Greek letters that look identical to Latin letters (e.g. "аpple.com"), encoded under the hood with "xn--".',
+            snippet: hostname
+          });
+        }
+
+        // 4. URL Shortener detection
+        if (LURE_DATA.urlShorteners.has(registrableDomain)) {
+          signals.push({
+            id: 'URL_SHORTENER',
+            category: 'Hidden Destination',
+            title: `Uses a URL shortener (${registrableDomain})`,
+            weight: 22,
+            severity: 'medium',
+            explanation: 'URL shorteners hide the true destination domain until after you click. Official security alerts from banks rarely mask their domain behind public shorteners.',
+            snippet: registrableDomain
+          });
+        }
+
+        // 5. Suspicious / commonly abused TLD
+        if (LURE_DATA.suspiciousTlds.has(tld)) {
+          signals.push({
+            id: 'URL_SUSPICIOUS_TLD',
+            category: 'Domain Extension',
+            title: `Uses high-risk or frequently abused TLD (.${tld})`,
+            weight: 22,
+            severity: 'high',
+            explanation: `Top-level domains like .${tld} are inexpensive or misleading (for instance, .zip looks like a file extension) and are heavily favored by short-lived phishing kits.`,
+            snippet: '.' + tld
+          });
+        }
+
+        // 6. Typosquatting & Brand-in-Subdomain/Path Analysis against 65+ Brands
+        const sldLabel = registrableDomain.split('.')[0] || '';
+        const sldClean = sldLabel.replace(/-/g, '');
+        const sldSkeleton = normalizeLookalikes(sldClean);
+
+        let matchedOfficialBrand = null;
+        for (const brand of LURE_DATA.knownBrands) {
+          if (brand.domains.includes(registrableDomain)) {
+            matchedOfficialBrand = brand;
+            break;
+          }
+        }
+
+        if (!matchedOfficialBrand && !isIpv4 && !isIpv6) {
+          let typoFound = false;
+          let brandInSubOrPathFound = false;
+
+          for (const brand of LURE_DATA.knownBrands) {
+            for (const token of brand.tokens) {
+              const tokenSkeleton = normalizeLookalikes(token);
+
+              // A) Check if SLD is a lookalike / typosquat of a known brand token
+              if (!typoFound && token.length >= 4 && sldClean.length >= 3) {
+                const rawDist = levenshteinDistance(sldClean, token);
+                const skelDist = levenshteinDistance(sldSkeleton, tokenSkeleton);
+
+                // Exact skeleton match with lookalike swap (e.g., rnicrosoft vs microsoft)
+                const isLookalikeSwap = (sldClean !== token && sldSkeleton === tokenSkeleton);
+                // 1-character typo on >= 5 char brand (e.g., paypaI, flipkrt, hdfcbnk)
+                const isCloseEdit = (token.length >= 5 && rawDist === 1);
+                // Domain contains exact brand + extra bait word (e.g., sbi-kyc.com or hdfcbank-verify.in)
+                const isHyphenCombo = (sldLabel !== token && (sldLabel.startsWith(token + '-') || sldLabel.endsWith('-' + token) || (token.length >= 5 && sldClean.includes(token))));
+
+                if (isLookalikeSwap || isCloseEdit || isHyphenCombo) {
+                  typoFound = true;
+                  signals.push({
+                    id: 'URL_TYPOSQUAT',
+                    category: 'Brand Impersonation',
+                    title: `Deceptive domain resembling ${brand.name}`,
+                    weight: 42,
+                    severity: 'high',
+                    explanation: `The registrable domain "${registrableDomain}" closely mimics ${brand.name} (official: ${brand.domains[0]}) using lookalike characters, a 1-letter typo, or added keywords.`,
+                    snippet: registrableDomain
+                  });
+                  break;
+                }
+              }
+
+              // B) Check if brand name appears in subdomain or path while real domain is unrelated
+              const fullSubAndPath = (subdomainPart + ' ' + parsed.pathname).toLowerCase();
+              const SubPathNormalized = normalizeLookalikes(subdomainPart);
+              if (
+                !brandInSubOrPathFound &&
+                (fullSubAndPath.includes(token) || (token.length >= 5 && SubPathNormalized.includes(tokenSkeleton)))
+              ) {
+                brandInSubOrPathFound = true;
+                signals.push({
+                  id: 'URL_BRAND_IN_SUBDOMAIN',
+                  category: 'Subdomain Trap',
+                  title: `${brand.name} appears in subdomain/path, not the real domain`,
+                  weight: 40,
+                  severity: 'high',
+                  explanation: `This link puts "${token}" in the subdomain or path to look trustworthy, but the actual website controlling it is "${registrableDomain}" (not ${brand.domains[0]}).`,
+                  snippet: hostname + parsed.pathname
+                });
+                break;
+              }
+            }
+          }
+        }
+
+        // 7. Excessive subdomains or hyphen stuffing
+        const subdomainCount = subdomainPart ? subdomainPart.split('.').filter(Boolean).length : 0;
+        if (subdomainCount >= 3) {
+          signals.push({
+            id: 'URL_EXCESSIVE_SUBDOMAINS',
+            category: 'URL Structure',
+            title: `Excessive subdomain depth (${subdomainCount} levels)`,
+            weight: 16,
+            severity: 'medium',
+            explanation: 'Chaining many subdomains (e.g. login.secure.verify.account.example.com) is often used to push the real domain out of view on mobile screens.',
+            snippet: hostname
+          });
+        }
+
+        const hyphenCount = (hostname.match(/-/g) || []).length;
+        if (hyphenCount >= 2) {
+          signals.push({
+            id: 'URL_HYPHEN_STUFFING',
+            category: 'URL Structure',
+            title: `Multiple hyphens in hostname (${hyphenCount} hyphens)`,
+            weight: 15,
+            severity: 'medium',
+            explanation: 'Phishing domains frequently string together keywords with multiple hyphens (like "sbi-kyc-update-online.com"), whereas established institutions use concise domains.',
+            snippet: hostname
+          });
+        }
+
+        // 8. Very long URL
+        if (trimmed.length > 95) {
+          signals.push({
+            id: 'URL_VERY_LONG',
+            category: 'URL Structure',
+            title: `Unusually long URL (${trimmed.length} characters)`,
+            weight: 10,
+            severity: 'medium',
+            explanation: 'Long URLs can conceal redirects, encoded tracking identifiers, or fake login parameters.',
+            snippet: trimmed.slice(0, 65) + '...'
+          });
+        }
+
+        // 9. Unencrypted HTTP on sensitive path/domain
+        const hasSensitiveKeywords = /(?:login|signin|verify|kyc|update|password|bank|secure|account|upi|wallet|confirm)/i.test(trimmed);
+        if (parsed.protocol === 'http:') {
+          signals.push({
+            id: 'URL_INSECURE_HTTP',
+            category: 'Transport Security',
+            title: hasSensitiveKeywords
+              ? 'Unencrypted HTTP used on a login/verification link'
+              : 'Uses unencrypted HTTP instead of HTTPS',
+            weight: hasSensitiveKeywords ? 24 : 12,
+            severity: hasSensitiveKeywords ? 'high' : 'medium',
+            explanation: 'Plain HTTP transmits data without encryption. Legitimate banks and account portals always use HTTPS.',
+            snippet: 'http://'
+          });
+        }
+
+        return {
+          valid: true,
+          raw: trimmed,
+          defanged,
+          anatomy,
+          matchedOfficialBrand,
+          signals,
+          score: calculateScoreFromSignals(signals).score
+        };
+      }
+
+      /**
+       * ============================================================================
+       * 4. MESSAGE ANALYZER MODULE
+       * Scans message text against weighted rules, extracts embedded URLs, checks
+       * brand-to-link mismatches, and returns exact character spans for highlighting.
+       * ============================================================================
+       */
+      function analyzeMessageInput(rawText) {
+        const text = String(rawText || '');
+        const signals = [];
+        const rawHighlights = [];
+
+        if (!text.trim()) {
+          return { text, signals: [], highlights: [], score: 0 };
+        }
+
+        // 1. Run all pattern-based message rules and capture character spans
+        for (const rule of LURE_DATA.messageRules) {
+          const ruleMatches = [];
+          for (const regex of rule.patterns) {
+            const clone = new RegExp(regex.source, regex.flags);
+            let match;
+            while ((match = clone.exec(text)) !== null) {
+              const matchedStr = match[0];
+              if (!matchedStr) {
+                clone.lastIndex++;
+                continue;
+              }
+              const start = match.index;
+              const end = start + matchedStr.length;
+              ruleMatches.push({ start, end, text: matchedStr });
+            }
+          }
+
+          if (ruleMatches.length > 0) {
+            const signalId = rule.id;
+            signals.push({
+              id: signalId,
+              category: rule.category,
+              title: rule.title,
+              weight: rule.weight,
+              severity: rule.severity,
+              explanation: rule.explanation,
+              snippet: ruleMatches.slice(0, 3).map(m => `"${m.text}"`).join(', ')
+            });
+
+            for (const m of ruleMatches) {
+              rawHighlights.push({
+                start: m.start,
+                end: m.end,
+                signalId,
+                title: rule.title,
+                category: rule.category,
+                weight: rule.weight,
+                severity: rule.severity,
+                explanation: rule.explanation
+              });
+            }
+          }
+        }
+
+        // 2. Detect mentioned brands in the message text
+        const lowerText = text.toLowerCase();
+        const mentionedBrands = [];
+        for (const brand of LURE_DATA.knownBrands) {
+          for (const token of brand.tokens) {
+            const brandRegex = new RegExp(`\\b${token}\\b`, 'i');
+            if (brandRegex.test(lowerText)) {
+              mentionedBrands.push(brand);
+              break;
+            }
+          }
+        }
+
+        // 3. Extract embedded URLs inside the message and analyze them
+        const urlRegex = /\b(?:https?:\/\/|www\.)[^\s<>()"']+(?<![.,!?;:)])|\b[a-z0-9.-]+\.(?:com|in|co\.in|org|net|gov\.in|xyz|top|click|tk|ml|zip|online|site|info|biz|me|ly)(?:\/[^\s<>()"']*[^\s<>()"'.,!?;:)])?/gi;
+        let urlMatch;
+        while ((urlMatch = urlRegex.exec(text)) !== null) {
+          const matchedUrl = urlMatch[0];
+          const start = urlMatch.index;
+          const end = start + matchedUrl.length;
+
+          // Avoid treating common attachment filenames like "invoice.pdf.exe" as URLs
+          if (/\.(?:pdf|exe|scr|doc|docx|xls|zip|html|htm|iso)$/i.test(matchedUrl) && !/^https?:\/\//i.test(matchedUrl)) {
+            continue;
+          }
+
+          const urlResult = analyzeUrlInput(matchedUrl);
+          const regDomain = urlResult.anatomy ? urlResult.anatomy.registrableDomain : '';
+
+          // Check if message mentions a known brand (e.g. SBI, HDFC, Microsoft) but link domain does not match
+          let mismatchedBrand = null;
+          for (const b of mentionedBrands) {
+            if (regDomain && !b.domains.includes(regDomain)) {
+              mismatchedBrand = b;
+              break;
+            }
+          }
+
+          if (mismatchedBrand) {
+            const mismatchId = 'MSG_BRAND_LINK_MISMATCH_' + start;
+            const explainText = `This message claims to be from ${mismatchedBrand.name}, but the link Actually goes to "${regDomain}" instead of an official domain (${mismatchedBrand.domains.join(' or ')}).`;
+            signals.push({
+              id: mismatchId,
+              category: 'Brand Spoofing',
+              title: `Mentions ${mismatchedBrand.name} with a mismatched link (${regDomain})`,
+              weight: 38,
+              severity: 'high',
+              explanation: explainText,
+              snippet: defangUrl(matchedUrl)
+            });
+            rawHighlights.push({
+              start,
+              end,
+              signalId: mismatchId,
+              title: `Mismatched link for ${mismatchedBrand.name}`,
+              category: 'Brand Spoofing',
+              weight: 38,
+              severity: 'high',
+              explanation: explainText
+            });
+          } else if (urlResult.score >= 20 && urlResult.signals.length > 0) {
+            const topUrlSignal = urlResult.signals[0];
+            const embedId = 'MSG_EMBEDDED_URL_' + start;
+            const weight = Math.min(32, Math.max(18, Math.round(urlResult.score * 0.6)));
+            signals.push({
+              id: embedId,
+              category: 'Suspicious Link in Message',
+              title: `Suspicious link detected: ${topUrlSignal.title}`,
+              weight,
+              severity: urlResult.score >= 35 ? 'high' : 'medium',
+              explanation: topUrlSignal.explanation,
+              snippet: defangUrl(matchedUrl)
+            });
+            rawHighlights.push({
+              start,
+              end,
+              signalId: embedId,
+              title: topUrlSignal.title,
+              category: 'Suspicious Link',
+              weight,
+              severity: urlResult.score >= 35 ? 'high' : 'medium',
+              explanation: topUrlSignal.explanation
+            });
+          }
+        }
+
+        // Resolve overlapping highlights (keep higher severity/weight or longer span first)
+        const resolvedHighlights = resolveHighlightSpans(rawHighlights);
+        const scoreObj = calculateScoreFromSignals(signals);
+
+        return {
+          text,
+          signals,
+          highlights: resolvedHighlights,
+          score: scoreObj.score
+        };
+      }
+
+      // Deduplicates and resolves overlapping [start, end] spans for clean inline rendering
+      function resolveHighlightSpans(spans) {
+        if (!spans.length) return [];
+        const sorted = [...spans].sort((a, b) => {
+          if (a.start !== b.start) return a.start - b.start;
+          if (b.weight !== a.weight) return b.weight - a.weight;
+          return (b.end - b.start) - (a.end - a.start);
+        });
+
+        const result = [];
+        let currentLastEnd = -1;
+        for (const span of sorted) {
+          if (span.start >= currentLastEnd) {
+            result.push(span);
+            currentLastEnd = span.end;
+          }
+        }
+        return result;
+      }
+
+      /**
+       * ============================================================================
+       * 5. EMAIL HEADER PARSER MODULE
+       * Unfolds multi-line headers, inspects From/Reply-To/Return-Path mismatches,
+       * Display Name spoofing, SPF/DKIM/DMARC statuses, and Received hop chain.
+       * ============================================================================
+       */
+      function extractEmailParts(rawHeaderValue) {
+        const val = String(rawHeaderValue || '').trim();
+        if (!val) return { displayName: '', email: '', domain: '' };
+
+        const angleMatch = val.match(/^(.*?)\s*<([^<>@\s]+@[^<>@\s]+)>/);
+        let displayName = '';
+        let email = '';
+
+        if (angleMatch) {
+          displayName = angleMatch[1].replace(/^["']|["']$/g, '').trim();
+          email = angleMatch[2].trim().toLowerCase();
+        } else {
+          const simpleEmailMatch = val.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+          if (simpleEmailMatch) {
+            email = simpleEmailMatch[1].toLowerCase();
+          }
+        }
+
+        const domain = email.includes('@') ? getRegistrableDomain(email.split('@')[1]) : '';
+        return { displayName, email, domain };
+      }
+
+      function analyzeHeadersInput(rawHeaders) {
+        const text = String(rawHeaders || '').trim();
+        const signals = [];
+
+        if (!text) {
+          return { valid: false, signals: [], auth: null, identity: null, hops: [], score: 0 };
+        }
+
+        // Unfold RFC 5322 multi-line headers (lines starting with whitespace continue previous line)
+        const unfoldedLines = text.replace(/\r\n/g, '\n').replace(/\n[ \t]+/g, ' ').split('\n');
+        const headersMap = {};
+        const receivedLines = [];
+
+        for (const line of unfoldedLines) {
+          const colonIdx = line.indexOf(':');
+          if (colonIdx > 0) {
+            const key = line.slice(0, colonIdx).trim().toLowerCase();
+            const val = line.slice(colonIdx + 1).trim();
+            if (key === 'received') {
+              receivedLines.push(val);
+            }
+            if (!headersMap[key]) {
+              headersMap[key] = val;
+            } else {
+              headersMap[key] += ' ; ' + val;
+            }
+          }
+        }
+
+        const fromObj = extractEmailParts(headersMap['from']);
+        const replyToObj = extractEmailParts(headersMap['reply-to']);
+        const returnPathObj = extractEmailParts(headersMap['return-path']);
+        const authRaw = (headersMap['authentication-results'] || '') + ' ' + (headersMap['received-spf'] || '');
+
+        // Parse SPF, DKIM, DMARC statuses
+        function parseAuthProtocol(proto) {
+          const match = authRaw.match(new RegExp(`\\b${proto}\\s*=\\s*(pass|fail|softfail|neutral|none|temperror|permerror)`, 'i'));
+          if (match) return match[1].toLowerCase();
+          if (proto === 'spf' && headersMap['received-spf']) {
+            const spfStart = headersMap['received-spf'].match(/^(pass|fail|softfail|neutral|none)/i);
+            if (spfStart) return spfStart[1].toLowerCase();
+          }
+          return 'not found';
+        }
+
+        const auth = {
+          spf: parseAuthProtocol('spf'),
+          dkim: parseAuthProtocol('dkim'),
+          dmarc: parseAuthProtocol('dmarc')
+        };
+
+        // 1. Evaluate SPF, DKIM, DMARC failures
+        if (auth.spf === 'fail' || auth.spf === 'softfail') {
+          signals.push({
+            id: 'HDR_SPF_FAIL',
+            category: 'Email Authentication',
+            title: `SPF check ${auth.spf.toUpperCase()}: Sending server is not authorized`,
+            weight: auth.spf === 'fail' ? 32 : 20,
+            severity: 'high',
+            explanation: 'Sender Policy Framework (SPF) lists which IP addresses are allowed to send email for a domain. A fail means this email came from an unauthorized server.',
+            snippet: `spf=${auth.spf}`
+          });
+        }
+
+        if (auth.dkim === 'fail') {
+          signals.push({
+            id: 'HDR_DKIM_FAIL',
+            category: 'Email Authentication',
+            title: 'DKIM cryptographic signature failed',
+            weight: 28,
+            severity: 'high',
+            explanation: 'DKIM attaches a digital signature proving the email was genuinely sent by the domain and not altered in transit. A failure strongly indicates spoofing or tampering.',
+            snippet: 'dkim=fail'
+          });
+        }
+
+        if (auth.dmarc === 'fail') {
+          signals.push({
+            id: 'HDR_DMARC_FAIL',
+            category: 'Email Authentication',
+            title: 'DMARC alignment failed',
+            weight: 35,
+            severity: 'high',
+            explanation: 'DMARC verifies that the visible "From" address aligns with validated SPF or DKIM domains. Failing DMARC is one of the strongest indicators of a spoofed sender.',
+            snippet: 'dmarc=fail'
+          });
+        }
+
+        // 2. Compare From vs Reply-To domain
+        if (fromObj.domain && replyToObj.domain && fromObj.domain !== replyToObj.domain) {
+          signals.push({
+            id: 'HDR_REPLY_TO_MISMATCH',
+            category: 'Header Spoofing',
+            title: `From domain (${fromObj.domain}) does not match Reply-To (${replyToObj.domain})`,
+            weight: 28,
+            severity: 'high',
+            explanation: 'Attackers forge a trusted "From" address but set "Reply-To" to an external account they control so any reply you send goes to the scammer.',
+            snippet: `From: ${fromObj.email} vs Reply-To: ${replyToObj.email}`
+          });
+        }
+
+        // 3. Compare From vs Return-Path domain
+        if (fromObj.domain && returnPathObj.domain && fromObj.domain !== returnPathObj.domain) {
+          signals.push({
+            id: 'HDR_RETURN_PATH_MISMATCH',
+            category: 'Header Spoofing',
+            title: `From domain (${fromObj.domain}) differs from Return-Path (${returnPathObj.domain})`,
+            weight: 20,
+            severity: 'medium',
+            explanation: 'While marketing tools sometimes use a custom bounce address, a suspicious Return-Path paired with failed authentication shows the mail originated elsewhere.',
+            snippet: `Return-Path: ${returnPathObj.email}`
+          });
+        }
+
+        // 4. Display Name Spoofing (Display Name mentions a brand or email that doesn't match actual sender domain)
+        if (fromObj.displayName && fromObj.domain) {
+          for (const brand of LURE_DATA.knownBrands) {
+            const dnLower = fromObj.displayName.toLowerCase();
+            const mentionsBrand = brand.tokens.some(t => new RegExp(`\\b${t}\\b`, 'i').test(dnLower));
+            if (mentionsBrand && !brand.domains.includes(fromObj.domain)) {
+              signals.push({
+                id: 'HDR_DISPLAY_NAME_SPOOF',
+                category: 'Display Name Spoofing',
+                title: `Display name claims "${fromObj.displayName}" but actual domain is "${fromObj.domain}"`,
+                weight: 36,
+                severity: 'high',
+                explanation: `Many mobile mail apps only show the Display Name ("${fromObj.displayName}"). Behind the scenes, the actual sender domain (${fromObj.domain}) does not belong to ${brand.name}.`,
+                snippet: `${fromObj.displayName} <${fromObj.email}>`
+              });
+              break;
+            }
+          }
+        }
+
+        // 5. Parse Received chain hops (reverse so index 0 is origin and last is destination)
+        const chronologicalReceived = [...receivedLines].reverse();
+        const hops = chronologicalReceived.map((rawHop, idx) => {
+          const fromMatch = rawHop.match(/\bfrom\s+([^\s;]+)/i);
+          const byMatch = rawHop.match(/\bby\s+([^\s;]+)/i);
+          const ipMatch = rawHop.match(/\[((?:\d{1,3}\.){3}\d{1,3}|[a-fA-F0-9:]+)\]/);
+          const datePart = rawHop.includes(';') ? rawHop.split(';').pop().trim() : '';
+
+          return {
+            step: idx + 1,
+            fromHost: fromMatch ? fromMatch[1] : 'unknown host',
+            byHost: byMatch ? byMatch[1] : 'receiving server',
+            ip: ipMatch ? ipMatch[1] : null,
+            timestamp: datePart,
+            raw: rawHop
+          };
+        });
+
+        // Check if first hop origin looks suspicious compared to claimed From domain
+        if (hops.length > 0 && fromObj.domain) {
+          const originHost = hops[0].fromHost.toLowerCase();
+          const originReg = getRegistrableDomain(originHost);
+          if (originReg && LURE_DATA.suspiciousTlds.has(originReg.split('.').pop())) {
+            signals.push({
+              id: 'HDR_SUSPICIOUS_ORIGIN_HOP',
+              category: 'Origin Relay',
+              title: `Originating mail server uses a suspicious host (${originHost})`,
+              weight: 22,
+              severity: 'medium',
+              explanation: 'The earliest Received header shows the message entered the mail stream from an unusual server that does not match the claimed organization.',
+              snippet: originHost
+            });
+          }
+        }
+
+        const identity = {
+          displayName: fromObj.displayName || '(none)',
+          fromEmail: fromObj.email || '(not found)',
+          replyToEmail: replyToObj.email || '(same as From)',
+          returnPathEmail: returnPathObj.email || '(not found)'
+        };
+
+        return {
+          valid: Boolean(fromObj.email || receivedLines.length > 0 || authRaw.trim()),
+          signals,
+          auth,
+          identity,
+          hops,
+          score: calculateScoreFromSignals(signals).score
+        };
+      }
+
+      /**
+       * ============================================================================
+       * 6. TRANSPARENT SCORER & VERDICT ENGINE
+       * Combines triggered signal weights into 0-100 score and maps to 4 tiers.
+       * ============================================================================
+       */
+      function calculateScoreFromSignals(signals) {
+        const rawSum = signals.reduce((acc, s) => acc + (Number(s.weight) || 0), 0);
+        const score = Math.min(100, Math.max(0, rawSum));
+
+        let verdict = 'Looks safe';
+        let tier = 'tier-safe';
+        let colorVar = 'var(--sage)';
+        let summary = 'No common phishing patterns, deceptive links, or authentication failures were triggered by our rules. Still, always verify unexpected requests directly.';
+
+        if (score >= 75) {
+          verdict = 'Dangerous';
+          tier = 'tier-danger';
+          colorVar = 'var(--vermilion)';
+          summary = 'Multiple high-risk phishing indicators were detected. This strongly resembles an active scam or credential harvesting attempt. Do not click, reply, or share any code.';
+        } else if (score >= 45) {
+          verdict = 'Likely phishing';
+          tier = 'tier-phishing';
+          colorVar = 'var(--vermilion)';
+          summary = 'Significant manipulation tactics or technical mismatches were found. Treat this as untrusted until you independently verify it through an official channel.';
+        } else if (score >= 16) {
+          verdict = 'Be careful';
+          tier = 'tier-caution';
+          colorVar = 'var(--amber)';
+          summary = 'Some caution signals were detected. While legitimate messages occasionally use urgent phrasing, pause and verify before taking action.';
+        }
+
+        return { score, rawSum, verdict, tier, colorVar, summary };
+      }
+
+      // Generates tailored, actionable "What to do next" steps by verdict
+      function getNextStepsForVerdict(score, mode) {
+        if (score >= 45) {
+          return [
+            'Do not click any links, scan QR codes, download attachments, or reply to the sender.',
+            'Never share your OTP, UPI PIN, CVV, or password—and remember you NEVER enter a UPI PIN to receive money.',
+            'To check your account status safely, open your official banking/service app directly or type the known official website address yourself.',
+            'If you already clicked and entered a password, change it immediately from a clean device and enable two-factor authentication.',
+            'For financial or UPI fraud in India: Contact your bank immediately to freeze the channel, call the National Cyber Crime Helpline at 1930 right away, or file a report at cybercrime.gov.in.'
+          ];
+        }
+        if (score >= 16) {
+          return [
+            'Pause before acting—attackers rely on urgency to rush your decision.',
+            'Verify the request independently by opening the official app or calling the official customer care number printed on the back of your bank card.',
+            mode === 'link'
+              ? 'Check the highlighted Registrable Domain carefully before visiting the page.'
+              : 'Hover over or inspect any links before clicking, and never open unexpected .zip, .html, or executable attachments.'
+          ];
+        }
+        return [
+          'Our rule engine did not find known phishing triggers, but rules cannot catch zero-day scams or private context.',
+          'If this message asks for money, sensitive documents, or unusual actions, confirm with the sender through a trusted voice call or official app.',
+          'Keep your browser and operating system updated and use a password manager—it will refuse to autofill passwords on lookalike domains.'
+        ];
+      }
+
+      /**
+       * ============================================================================
+       * 7. DOM RENDERER & UI CONTROLLER
+       * Renders annotations strictly via DOM TextNodes and manages tabs, quiz,
+       * copy report, optional Ask AI memory key, and #selftest.
+       * ============================================================================
+       */
+      let currentMode = 'message';
+      let lastAnalysisReport = null;
+      let memoryGeminiApiKey = ''; // Stored strictly in JS memory, never in localStorage
+      let allReasonsExpanded = false;
+
+      // DOM Element References
+      const els = {
+        brandResetBtn: document.getElementById('brandResetBtn'),
+        tabs: document.querySelectorAll('.tab-btn'),
+        quizToggleBtn: document.getElementById('quizToggleBtn'),
+        progressBarTrack: document.getElementById('progressBarTrack'),
+        analyzerView: document.getElementById('analyzerView'),
+        quizView: document.getElementById('quizView'),
+        modeEyebrow: document.getElementById('modeEyebrow'),
+        modeSubtitle: document.getElementById('modeSubtitle'),
+        workspaceGrid: document.getElementById('workspaceGrid'),
+        workspacePanel: document.getElementById('workspace-panel'),
+        inputLabel: document.getElementById('inputLabel'),
+        clearInputBtn: document.getElementById('clearInputBtn'),
+        mainInput: document.getElementById('mainInput'),
+        analyzeBtn: document.getElementById('analyzeBtn'),
+        tryExampleBtn: document.getElementById('tryExampleBtn'),
+        examplesDrawer: document.getElementById('examplesDrawer'),
+        examplesGrid: document.getElementById('examplesGrid'),
+        annotatedContainer: document.getElementById('annotatedContainer'),
+        annotatedBox: document.getElementById('annotatedBox'),
+        annotationTooltip: document.getElementById('annotationTooltip'),
+        tooltipMeta: document.getElementById('tooltipMeta'),
+        tooltipTitle: document.getElementById('tooltipTitle'),
+        tooltipDesc: document.getElementById('tooltipDesc'),
+        closeTooltipBtn: document.getElementById('closeTooltipBtn'),
+        linkBreakdownPanel: document.getElementById('linkBreakdownPanel'),
+        defangedUrlCode: document.getElementById('defangedUrlCode'),
+        copyDefangedBtn: document.getElementById('copyDefangedBtn'),
+        urlAnatomyGrid: document.getElementById('urlAnatomyGrid'),
+        headersBreakdownPanel: document.getElementById('headersBreakdownPanel'),
+        headerAuthGrid: document.getElementById('headerAuthGrid'),
+        headerIdentityGrid: document.getElementById('headerIdentityGrid'),
+        headerHopTimeline: document.getElementById('headerHopTimeline'),
+        resultsColumn: document.getElementById('resultsColumn'),
+        scoreValue: document.getElementById('scoreValue'),
+        verdictBadge: document.getElementById('verdictBadge'),
+        scoreMeterFill: document.getElementById('scoreMeterFill'),
+        scoreSummary: document.getElementById('scoreSummary'),
+        findingsCount: document.getElementById('findingsCount'),
+        expandAllWhyBtn: document.getElementById('expandAllWhyBtn'),
+        findingsList: document.getElementById('findingsList'),
+        calcExpanderBtn: document.getElementById('calcExpanderBtn'),
+        calcExpanderIcon: document.getElementById('calcExpanderIcon'),
+        calcExpanderContent: document.getElementById('calcExpanderContent'),
+        calcTableBody: document.getElementById('calcTableBody'),
+        nextStepsList: document.getElementById('nextStepsList'),
+        copyReportBtn: document.getElementById('copyReportBtn'),
+        copyReportFeedback: document.getElementById('copyReportFeedback'),
+        aiExpanderBtn: document.getElementById('aiExpanderBtn'),
+        aiExpanderIcon: document.getElementById('aiExpanderIcon'),
+        aiExpanderContent: document.getElementById('aiExpanderContent'),
+        geminiKeyInput: document.getElementById('geminiKeyInput'),
+        askAiBtn: document.getElementById('askAiBtn'),
+        clearAiKeyBtn: document.getElementById('clearAiKeyBtn'),
+        aiResponseBox: document.getElementById('aiResponseBox'),
+        selftestBanner: document.getElementById('selftestBanner')
+      };
+
+      const modeConfig = {
+        message: {
+          eyebrow: 'MODE 01 // EMAIL & SMS DETECTOR',
+          subtitle: 'Paste a suspicious email or SMS below. Lure inspects it locally in your browser, highlights manipulation tactics inline, and explains every signal in plain English.',
+          label: 'PASTE MESSAGE TEXT',
+          placeholder: 'e.g. Dear customer, your SBI account will be suspended within 24 hours due to incomplete KYC. Update immediately at http://sbi-kyc-update.xyz...',
+          isMono: false
+        },
+        link: {
+          eyebrow: 'MODE 02 // CLIENT-SIDE URL INSPECTOR',
+          subtitle: 'Paste any suspicious link. Lure parses its anatomy offline, checks for lookalike domains against 65+ brands, and generates a safe defanged URL without ever visiting the site.',
+          label: 'PASTE SUSPICIOUS URL',
+          placeholder: 'e.g. http://sbi-online.rnicrosoft-support.xyz/kyc-verify/login?token=confirm',
+          isMono: true
+        },
+        headers: {
+          eyebrow: 'MODE 03 // RAW EMAIL HEADER PARSER',
+          subtitle: 'Paste raw email headers ("Show original" in Gmail/Outlook). Lure checks SPF, DKIM, and DMARC alignment, compares Reply-To addresses, and maps the server hop timeline.',
+          label: 'PASTE RAW RFC 5322 HEADERS',
+          placeholder: 'Return-Path: <bounce@mailer.xyz>\nAuthentication-Results: mx.google.com; spf=fail; dkim=fail; dmarc=fail\nFrom: "HDFC Bank" <security@hdfcbank.com>\nReply-To: <scammer@free-mail.top>',
+          isMono: true
+        }
+      };
+
+      function switchMode(newMode, preserveInput = false) {
+        currentMode = newMode;
+        els.quizView.hidden = true;
+        els.analyzerView.hidden = false;
+        els.quizToggleBtn.setAttribute('aria-pressed', 'false');
+
+        els.tabs.forEach(btn => {
+          const isMatch = btn.dataset.mode === newMode;
+          btn.setAttribute('aria-selected', isMatch ? 'true' : 'false');
+          if (isMatch) {
+            els.workspacePanel.setAttribute('aria-labelledby', btn.id);
+          }
+        });
+
+        const cfg = modeConfig[newMode];
+        els.modeEyebrow.textContent = cfg.eyebrow;
+        els.modeSubtitle.textContent = cfg.subtitle;
+        els.inputLabel.textContent = cfg.label;
+        els.mainInput.placeholder = cfg.placeholder;
+        els.mainInput.classList.toggle('is-mono', cfg.isMono);
+
+        if (!preserveInput) {
+          els.mainInput.value = '';
+          resetAnalysisOutput();
+        }
+      }
+
+      function resetAnalysisOutput() {
+        els.workspaceGrid.classList.remove('has-results');
+        els.resultsColumn.hidden = true;
+        els.annotatedContainer.hidden = true;
+        els.annotationTooltip.hidden = true;
+        els.linkBreakdownPanel.hidden = true;
+        els.headersBreakdownPanel.hidden = true;
+        els.clearInputBtn.hidden = !els.mainInput.value.trim();
+        els.aiResponseBox.hidden = true;
+        els.copyReportFeedback.textContent = '';
+        lastAnalysisReport = null;
+      }
+
+      // Safely constructs inline highlighted text using only createTextNode and <mark> elements
+      function renderAnnotatedMessage(rawText, highlights) {
+        els.annotatedBox.textContent = '';
+        els.annotationTooltip.hidden = true;
+
+        if (!highlights || highlights.length === 0) {
+          els.annotatedBox.appendChild(document.createTextNode(rawText));
+          return;
+        }
+
+        let cursor = 0;
+        highlights.forEach((h, idx) => {
+          if (h.start > cursor) {
+            els.annotatedBox.appendChild(document.createTextNode(rawText.slice(cursor, h.start)));
+          }
+
+          const mark = document.createElement('mark');
+          mark.className = `lure-mark severity-${h.severity === 'high' ? 'high' : 'medium'}`;
+          mark.tabIndex = 0;
+          mark.dataset.signalId = h.signalId;
+          mark.dataset.highlightIdx = String(idx);
+          mark.setAttribute('role', 'button');
+          mark.setAttribute('aria-label', `${h.title}. Press Enter for details.`);
+          mark.appendChild(document.createTextNode(rawText.slice(h.start, h.end)));
+
+          const activateHighlight = () => {
+            showHighlightTooltip(h, mark);
+            highlightLinkedFinding(h.signalId);
+          };
+
+          mark.addEventListener('click', activateHighlight);
+          mark.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              activateHighlight();
+            }
+          });
+
+          els.annotatedBox.appendChild(mark);
+          cursor = h.end;
+        });
+
+        if (cursor < rawText.length) {
+          els.annotatedBox.appendChild(document.createTextNode(rawText.slice(cursor)));
+        }
+      }
+
+      function showHighlightTooltip(h, markEl) {
+        document.querySelectorAll('.lure-mark.is-active').forEach(el => el.classList.remove('is-active'));
+        if (markEl) markEl.classList.add('is-active');
+
+        els.tooltipMeta.textContent = `${h.category} // +${h.weight} PTS`;
+        els.tooltipMeta.className = `tooltip-meta ${h.severity === 'high' ? 'is-high' : 'is-medium'}`;
+        els.tooltipTitle.textContent = h.title;
+        els.tooltipDesc.textContent = h.explanation;
+        els.annotationTooltip.hidden = false;
+      }
+
+      function highlightLinkedFinding(signalId) {
+        document.querySelectorAll('.finding-item').forEach(item => {
+          const isMatch = item.dataset.signalId === signalId;
+          item.classList.toggle('is-active', isMatch);
+          if (isMatch) {
+            const detailBox = item.querySelector('.finding-details');
+            const toggleBtn = item.querySelector('.why-toggle-btn');
+            if (detailBox && detailBox.hidden) {
+              detailBox.hidden = false;
+              if (toggleBtn) toggleBtn.textContent = 'Hide why';
+            }
+          }
+        });
+      }
+
+      function renderLinkBreakdown(urlResult) {
+        els.defangedUrlCode.textContent = urlResult.defanged || '(empty)';
+        els.urlAnatomyGrid.textContent = '';
+
+        if (!urlResult.anatomy) return;
+        const fields = [
+          { key: 'Protocol', val: urlResult.anatomy.protocol, emph: false },
+          { key: 'Subdomains', val: urlResult.anatomy.subdomains, emph: false },
+          { key: 'Real Registrable Domain', val: urlResult.anatomy.registrableDomain, emph: true },
+          { key: 'Path', val: urlResult.anatomy.path, emph: false },
+          { key: 'Query String', val: urlResult.anatomy.query, emph: false }
+        ];
+
+        fields.forEach(f => {
+          const cell = document.createElement('div');
+          cell.className = 'anatomy-cell' + (f.emph ? ' is-emphasized' : '');
+          const k = document.createElement('div');
+          k.className = 'anatomy-key';
+          k.textContent = f.key;
+          const v = document.createElement('div');
+          v.className = 'anatomy-val';
+          v.textContent = f.val;
+          cell.appendChild(k);
+          cell.appendChild(v);
+          els.urlAnatomyGrid.appendChild(cell);
+        });
+      }
+
+      function renderHeadersBreakdown(hdrResult) {
+        els.headerAuthGrid.textContent = '';
+        els.headerIdentityGrid.textContent = '';
+        els.headerHopTimeline.textContent = '';
+
+        if (!hdrResult.auth) return;
+
+        const authDescriptions = {
+          spf: 'SPF checks if the sending server IP is authorized by the domain.',
+          dkim: 'DKIM verifies the cryptographic signature attached by the domain.',
+          dmarc: 'DMARC ensures the visible From address aligns with SPF/DKIM.'
+        };
+
+        ['spf', 'dkim', 'dmarc'].forEach(proto => {
+          const status = hdrResult.auth[proto];
+          const card = document.createElement('div');
+          card.className = 'auth-card';
+
+          const head = document.createElement('div');
+          head.className = 'auth-head';
+          const title = document.createElement('span');
+          title.className = 'auth-proto';
+          title.textContent = proto.toUpperCase();
+
+          const pill = document.createElement('span');
+          let pillClass = 'is-warn';
+          if (status === 'pass') pillClass = 'is-pass';
+          else if (status === 'fail' || status === 'softfail') pillClass = 'is-fail';
+          pill.className = `status-pill ${pillClass}`;
+          pill.textContent = status;
+
+          head.appendChild(title);
+          head.appendChild(pill);
+
+          const desc = document.createElement('div');
+          desc.style.fontSize = '0.75rem';
+          desc.style.color = 'var(--ink-secondary)';
+          desc.textContent = authDescriptions[proto];
+
+          card.appendChild(head);
+          card.appendChild(desc);
+          els.headerAuthGrid.appendChild(card);
+        });
+
+        const idFields = [
+          { key: 'From Display Name', val: hdrResult.identity.displayName },
+          { key: 'From Address', val: hdrResult.identity.fromEmail, emph: true },
+          { key: 'Reply-To Address', val: hdrResult.identity.replyToEmail },
+          { key: 'Return-Path (Bounce)', val: hdrResult.identity.returnPathEmail }
+        ];
+
+        idFields.forEach(f => {
+          const cell = document.createElement('div');
+          cell.className = 'anatomy-cell' + (f.emph ? ' is-emphasized' : '');
+          const k = document.createElement('div');
+          k.className = 'anatomy-key';
+          k.textContent = f.key;
+          const v = document.createElement('div');
+          v.className = 'anatomy-val';
+          v.textContent = f.val;
+          cell.appendChild(k);
+          cell.appendChild(v);
+          els.headerIdentityGrid.appendChild(cell);
+        });
+
+        if (hdrResult.hops.length === 0) {
+          const emptyLi = document.createElement('li');
+          emptyLi.className = 'hop-item';
+          emptyLi.textContent = 'No "Received:" hop lines found in pasted headers.';
+          els.headerHopTimeline.appendChild(emptyLi);
+        } else {
+          hdrResult.hops.forEach(hop => {
+            const li = document.createElement('li');
+            li.className = 'hop-item';
+            const title = document.createElement('div');
+            title.className = 'hop-step-title';
+            title.textContent = `Hop ${hop.step}: ${hop.fromHost} → ${hop.byHost}`;
+            const meta = document.createElement('div');
+            meta.className = 'hop-step-meta';
+            meta.textContent = `${hop.ip ? 'IP: ' + hop.ip + ' // ' : ''}${hop.timestamp || 'Timestamp not specified'}`;
+            li.appendChild(title);
+            li.appendChild(meta);
+            els.headerHopTimeline.appendChild(li);
+          });
+        }
+      }
+
+      function renderResultsColumn(signals, scoreObj, mode, inputText) {
+        els.workspaceGrid.classList.add('has-results');
+        els.resultsColumn.hidden = false;
+        allReasonsExpanded = false;
+        els.expandAllWhyBtn.textContent = 'Show all reasons';
+
+        els.scoreValue.textContent = String(scoreObj.score);
+        els.scoreValue.style.color = scoreObj.colorVar;
+        els.verdictBadge.textContent = scoreObj.verdict;
+        els.verdictBadge.className = `verdict-badge ${scoreObj.tier}`;
+
+        els.scoreMeterFill.style.width = `${Math.max(4, scoreObj.score)}%`;
+        els.scoreMeterFill.style.backgroundColor = scoreObj.colorVar;
+        els.scoreSummary.textContent = scoreObj.summary;
+
+        els.findingsCount.textContent = String(signals.length);
+        els.findingsList.textContent = '';
+        els.calcTableBody.textContent = '';
+
+        if (signals.length === 0) {
+          const safeLi = document.createElement('li');
+          safeLi.className = 'finding-item';
+          const top = document.createElement('div');
+          top.className = 'finding-top';
+          const tGroup = document.createElement('div');
+          tGroup.className = 'finding-title-group';
+          const badge = document.createElement('span');
+          badge.className = 'finding-weight is-safe';
+          badge.textContent = '0 PTS';
+          const title = document.createElement('span');
+          title.className = 'finding-title';
+          title.textContent = 'No suspicious rule patterns triggered';
+          tGroup.appendChild(badge);
+          tGroup.appendChild(title);
+          top.appendChild(tGroup);
+          safeLi.appendChild(top);
+          els.findingsList.appendChild(safeLi);
+
+          const tr = document.createElement('tr');
+          const td1 = document.createElement('td');
+          td1.textContent = 'No rules triggered';
+          const td2 = document.createElement('td');
+          td2.textContent = '—';
+          const td3 = document.createElement('td');
+          td3.textContent = '0';
+          tr.appendChild(td1);
+          tr.appendChild(td2);
+          tr.appendChild(td3);
+          els.calcTableBody.appendChild(tr);
+        } else {
+          signals.forEach(sig => {
+            const li = document.createElement('li');
+            li.className = 'finding-item is-linked';
+            li.dataset.signalId = sig.id;
+
+            const top = document.createElement('div');
+            top.className = 'finding-top';
+
+            const tGroup = document.createElement('div');
+            tGroup.className = 'finding-title-group';
+
+            const weightBadge = document.createElement('span');
+            weightBadge.className = `finding-weight ${sig.severity === 'high' ? 'is-high' : 'is-medium'}`;
+            weightBadge.textContent = `+${sig.weight}`;
+
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'finding-title';
+            titleSpan.textContent = sig.title;
+
+            tGroup.appendChild(weightBadge);
+            tGroup.appendChild(titleSpan);
+
+            const whyBtn = document.createElement('button');
+            whyBtn.type = 'button';
+            whyBtn.className = 'why-toggle-btn';
+            whyBtn.textContent = 'Show why';
+
+            const detailsDiv = document.createElement('div');
+            detailsDiv.className = 'finding-details';
+            detailsDiv.hidden = true;
+
+            const expP = document.createElement('p');
+            expP.textContent = sig.explanation;
+            detailsDiv.appendChild(expP);
+
+            if (sig.snippet) {
+              const snip = document.createElement('div');
+              snip.className = 'finding-matched-snippet';
+              snip.textContent = `Matched: ${sig.snippet}`;
+              detailsDiv.appendChild(snip);
+            }
+
+            whyBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const isHidden = detailsDiv.hidden;
+              detailsDiv.hidden = !isHidden;
+              whyBtn.textContent = isHidden ? 'Hide why' : 'Show why';
+            });
+
+            // Clicking finding card pulses corresponding inline highlight in Message mode
+            li.addEventListener('click', () => {
+              const matchingMarks = document.querySelectorAll(`.lure-mark[data-signal-id="${sig.id}"]`);
+              document.querySelectorAll('.lure-mark.is-active').forEach(m => m.classList.remove('is-active'));
+              if (matchingMarks.length > 0) {
+                matchingMarks.forEach(m => m.classList.add('is-active'));
+                matchingMarks[0].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+              }
+              if (detailsDiv.hidden) {
+                detailsDiv.hidden = false;
+                whyBtn.textContent = 'Hide why';
+              }
+            });
+
+            top.appendChild(tGroup);
+            top.appendChild(whyBtn);
+            li.appendChild(top);
+            li.appendChild(detailsDiv);
+            els.findingsList.appendChild(li);
+
+            // Populate transparent score calculation table row
+            const tr = document.createElement('tr');
+            const tdTitle = document.createElement('td');
+            tdTitle.textContent = sig.title;
+            const tdCat = document.createElement('td');
+            tdCat.textContent = sig.category;
+            const tdPts = document.createElement('td');
+            tdPts.textContent = `+${sig.weight}`;
+            tr.appendChild(tdTitle);
+            tr.appendChild(tdCat);
+            tr.appendChild(tdPts);
+            els.calcTableBody.appendChild(tr);
+          });
+
+          // Total row
+          const totalTr = document.createElement('tr');
+          totalTr.style.fontWeight = '700';
+          const tdTotalLabel = document.createElement('td');
+          tdTotalLabel.textContent = scoreObj.rawSum > 100 ? `Total (capped from ${scoreObj.rawSum})` : 'Total Final Score';
+          const tdEmpty = document.createElement('td');
+          tdEmpty.textContent = '';
+          const tdTotalVal = document.createElement('td');
+          tdTotalVal.textContent = `${scoreObj.score} / 100`;
+          totalTr.appendChild(tdTotalLabel);
+          totalTr.appendChild(tdEmpty);
+          totalTr.appendChild(tdTotalVal);
+          els.calcTableBody.appendChild(totalTr);
+        }
+
+        // Render "What to do next" steps
+        const steps = getNextStepsForVerdict(scoreObj.score, mode);
+        els.nextStepsList.textContent = '';
+        steps.forEach(s => {
+          const li = document.createElement('li');
+          li.textContent = s;
+          els.nextStepsList.appendChild(li);
+        });
+
+        // Store plain-text report for Copy Report button
+        lastAnalysisReport = buildPlainTextReport(mode, inputText, scoreObj, signals, steps);
+      }
+
+      function runMainAnalysis() {
+        const rawVal = els.mainInput.value;
+        if (!rawVal.trim()) {
+          els.mainInput.focus();
+          return;
+        }
+
+        // Trigger thin 400ms progress line animation
+        els.progressBarTrack.classList.add('is-active');
+
+        setTimeout(() => {
+          els.progressBarTrack.classList.remove('is-active');
+
+          if (currentMode === 'message') {
+            const res = analyzeMessageInput(rawVal);
+            const scoreObj = calculateScoreFromSignals(res.signals);
+            els.annotatedContainer.hidden = false;
+            els.linkBreakdownPanel.hidden = true;
+            els.headersBreakdownPanel.hidden = true;
+            renderAnnotatedMessage(res.text, res.highlights);
+            renderResultsColumn(res.signals, scoreObj, 'message', rawVal);
+          } else if (currentMode === 'link') {
+            const res = analyzeUrlInput(rawVal);
+            const scoreObj = calculateScoreFromSignals(res.signals);
+            els.annotatedContainer.hidden = true;
+            els.linkBreakdownPanel.hidden = false;
+            els.headersBreakdownPanel.hidden = true;
+            renderLinkBreakdown(res);
+            renderResultsColumn(res.signals, scoreObj, 'link', res.defanged);
+          } else if (currentMode === 'headers') {
+            const res = analyzeHeadersInput(rawVal);
+            const scoreObj = calculateScoreFromSignals(res.signals);
+            els.annotatedContainer.hidden = true;
+            els.linkBreakdownPanel.hidden = true;
+            els.headersBreakdownPanel.hidden = false;
+            renderHeadersBreakdown(res);
+            renderResultsColumn(res.signals, scoreObj, 'headers', rawVal);
+          }
+        }, 360);
+      }
+
+      function buildPlainTextReport(mode, input, scoreObj, signals, steps) {
+        const lines = [
+          '==================================================',
+          'LURE — PHISHING ANALYSIS REPORT',
+          '==================================================',
+          `Mode: ${mode.toUpperCase()}`,
+          `Verdict: ${scoreObj.verdict} (${scoreObj.score}/100)`,
+          `Summary: ${scoreObj.summary}`,
+          '',
+          '--- INPUT SAMPLE (DEFANGED) ---',
+          defangUrl(input.slice(0, 500)) + (input.length > 500 ? '...' : ''),
+          '',
+          `--- TRIGGERED SIGNALS (${signals.length}) ---`
+        ];
+
+        if (signals.length === 0) {
+          lines.push('* None (0 pts)');
+        } else {
+          signals.forEach(s => {
+            lines.push(`* [+${s.weight} pts] ${s.title} (${s.category})`);
+            lines.push(`  Why: ${s.explanation}`);
+            if (s.snippet) lines.push(`  Matched: ${s.snippet}`);
+          });
+        }
+
+        lines.push('', '--- RECOMMENDED NEXT STEPS ---');
+        steps.forEach((step, idx) => {
+          lines.push(`${idx + 1}. ${step}`);
+        });
+        lines.push('', 'Note: Lure uses rules, not magic. Always verify with the official source.');
+        return lines.join('\n');
+      }
+
+      function copyTextToClipboard(text, onSuccess) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(onSuccess).catch(() => fallbackCopy(text, onSuccess));
+        } else {
+          fallbackCopy(text, onSuccess);
+        }
+      }
+
+      function fallbackCopy(text, onSuccess) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          if (onSuccess) onSuccess();
+        } catch (err) {
+          console.error('Copy failed', err);
+        }
+        document.body.removeChild(ta);
+      }
+
+      let quizIndex = 0;
+      let quizScore = 0;
+
+      const quizEls = {
+        roundLabel: document.getElementById('quizRoundLabel'),
+        scoreLabel: document.getElementById('quizScoreLabel'),
+        promptBox: document.getElementById('quizPromptBox'),
+        choiceRow: document.getElementById('quizChoiceRow'),
+        safeBtn: document.getElementById('quizSafeBtn'),
+        phishBtn: document.getElementById('quizPhishBtn'),
+        feedbackBox: document.getElementById('quizFeedbackBox'),
+        feedbackTitle: document.getElementById('quizFeedbackTitle'),
+        feedbackExplain: document.getElementById('quizFeedbackExplain'),
+        engineSignals: document.getElementById('quizEngineSignals'),
+        nextBtn: document.getElementById('quizNextBtn')
+      };
+
+      function startQuiz() {
+        quizIndex = 0;
+        quizScore = 0;
+        renderQuizRound();
+      }
+
+      function renderQuizRound() {
+        if (quizIndex >= LURE_DATA.quizQuestions.length) {
+          quizEls.roundLabel.textContent = 'QUIZ COMPLETE';
+          quizEls.scoreLabel.textContent = `FINAL SCORE: ${quizScore} / ${LURE_DATA.quizQuestions.length}`;
+          quizEls.promptBox.textContent = `You spotted ${quizScore} out of ${LURE_DATA.quizQuestions.length} lures correctly.\n\nKey takeaway: Always inspect the real registrable domain before clicking, treat artificial 24-hour urgency with skepticism, and never enter an OTP or UPI PIN to receive money or update KYC.`;
+          quizEls.choiceRow.hidden = true;
+          quizEls.feedbackBox.hidden = false;
+          quizEls.feedbackTitle.textContent = quizScore >= 5 ? 'Sharp eye.' : 'Good practice.';
+          quizEls.feedbackExplain.textContent = 'Want to play again or test your own messages?';
+          quizEls.engineSignals.textContent = '';
+          quizEls.nextBtn.textContent = 'Restart Quiz';
+          return;
+        }
+
+        const q = LURE_DATA.quizQuestions[quizIndex];
+        quizEls.roundLabel.textContent = `ROUND ${quizIndex + 1} OF ${LURE_DATA.quizQuestions.length} // ${q.mode.toUpperCase()}`;
+        quizEls.scoreLabel.textContent = `SCORE: ${quizScore} / ${LURE_DATA.quizQuestions.length}`;
+        quizEls.promptBox.textContent = q.prompt;
+        quizEls.choiceRow.hidden = false;
+        quizEls.safeBtn.disabled = false;
+        quizEls.phishBtn.disabled = false;
+        quizEls.feedbackBox.hidden = true;
+        quizEls.nextBtn.textContent = quizIndex === LURE_DATA.quizQuestions.length - 1 ? 'See final score' : 'Next round';
+      }
+
+      function handleQuizChoice(userChosePhishing) {
+        const q = LURE_DATA.quizQuestions[quizIndex];
+        const isCorrect = userChosePhishing === q.isPhishing;
+        if (isCorrect) quizScore++;
+
+        quizEls.safeBtn.disabled = true;
+        quizEls.phishBtn.disabled = true;
+        quizEls.scoreLabel.textContent = `SCORE: ${quizScore} / ${LURE_DATA.quizQuestions.length}`;
+
+        // Run actual Lure engine on the quiz item to show real score & signals
+        const engineRes = q.mode === 'link' ? analyzeUrlInput(q.prompt) : analyzeMessageInput(q.prompt);
+        const sigSummary = engineRes.signals.length > 0
+          ? `Lure Engine Score: ${engineRes.score}/100 — Signals: ${engineRes.signals.map(s => s.title).join(' | ')}`
+          : `Lure Engine Score: ${engineRes.score}/100 — No phishing signals triggered.`;
+
+        quizEls.feedbackTitle.textContent = isCorrect
+          ? `Correct — ${q.isPhishing ? 'It is a phishing lure.' : 'It looks safe.'}`
+          : `Not quite — ${q.isPhishing ? 'This is actually a phishing lure.' : 'This one is actually safe.'}`;
+        quizEls.feedbackTitle.style.color = isCorrect ? 'var(--sage)' : 'var(--vermilion)';
+        quizEls.feedbackExplain.textContent = q.explanation;
+        quizEls.engineSignals.textContent = sigSummary;
+        quizEls.feedbackBox.hidden = false;
+      }
+
+      async function requestGeminiSecondOpinion() {
+        const keyInputVal = els.geminiKeyInput.value.trim();
+        if (keyInputVal) {
+          memoryGeminiApiKey = keyInputVal;
+        }
+        if (!memoryGeminiApiKey) {
+          els.aiResponseBox.hidden = false;
+          els.aiResponseBox.textContent = 'Please paste your Gemini API key above first. It will only be held in temporary memory for this tab session.';
+          return;
+        }
+
+        const currentInput = els.mainInput.value.trim();
+        if (!currentInput) {
+          els.aiResponseBox.hidden = false;
+          els.aiResponseBox.textContent = 'Please enter a message, URL, or header in the main input box first.';
+          return;
+        }
+
+        els.aiResponseBox.hidden = false;
+        els.aiResponseBox.textContent = 'Requesting plain-English second opinion from Gemini...';
+
+        try {
+          const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(memoryGeminiApiKey)}`;
+          const promptText = `You are a concise cybersecurity educator. Analyze the following untrusted ${currentMode} for phishing or social engineering risks in 3 short bullet points in plain English:\n\n${currentInput.slice(0, 2000)}`;
+
+          const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: promptText }] }]
+            })
+          });
+
+          if (!resp.ok) {
+            throw new Error(`API returned status ${resp.status}`);
+          }
+
+          const data = await resp.json();
+          const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response text returned.';
+          els.aiResponseBox.textContent = reply;
+        } catch (err) {
+          els.aiResponseBox.textContent = `Could not reach Gemini API (${err.message}). Verify your API key or network connection. Remember: Lure's built-in rule engine works 100% offline without AI.`;
+        }
+      }
+
+      /**
+       * ============================================================================
+       * 8. AUTOMATED SELF-TEST SUITE (#selftest) — 12 Test Cases
+       * ============================================================================
+       */
+      function runSelfTests() {
+        const tests = [
+          {
+            name: '1. Urgency & Account Threat Detection',
+            fn: () => {
+              const r = analyzeMessageInput('Your account has been suspended! Act now within 24 hours to avoid legal action.');
+              return r.score >= 35 && r.signals.some(s => s.id === 'MSG_URGENCY') && r.signals.some(s => s.id === 'MSG_THREATS');
+            }
+          },
+          {
+            name: '2. Credential & OTP Harvesting Detection',
+            fn: () => {
+              const r = analyzeMessageInput('Please share your 6-digit OTP and UPI PIN immediately to verify your identity.');
+              return r.signals.some(s => s.id === 'MSG_CREDENTIALS');
+            }
+          },
+          {
+            name: '3. Indian KYC & Electricity Scam Detection',
+            fn: () => {
+              const r = analyzeMessageInput('Your SBI PAN KYC is expired and electricity power will be disconnected tonight at 9:30 PM.');
+              return r.signals.some(s => s.id === 'MSG_INDIA_KYC_BANK') && r.signals.some(s => s.id === 'MSG_INDIA_ELECTRICITY');
+            }
+          },
+          {
+            name: '4. Risky Double-Extension Attachment Detection',
+            fn: () => {
+              const r = analyzeMessageInput('Please open the attached receipt invoice_2026.pdf.exe for your records.');
+              return r.signals.some(s => s.id === 'MSG_RISKY_ATTACHMENT');
+            }
+          },
+          {
+            name: '5. Brand Impersonation with Mismatched Link in Message',
+            fn: () => {
+              const r = analyzeMessageInput('Dear Customer, HDFC Bank alert: verify your account at https://secure-update-portal.xyz/login');
+              return r.signals.some(s => s.id.startsWith('MSG_BRAND_LINK_MISMATCH_'));
+            }
+          },
+          {
+            name: '6. Safe Conversational Message Scores Low (<= 15)',
+            fn: () => {
+              const r = analyzeMessageInput('Hi Priya, thanks for sending the project notes. Let us meet at 3 PM tomorrow to review the design.');
+              return r.score === 0 && r.signals.length === 0;
+            }
+          },
+          {
+            name: '7. URL Lookalike / Homoglyph Typosquatting (rnicrosoft)',
+            fn: () => {
+              const r = analyzeUrlInput('https://rnicrosoft.com/login');
+              return r.signals.some(s => s.id === 'URL_TYPOSQUAT') && r.score >= 40;
+            }
+          },
+          {
+            name: '8. URL Brand in Subdomain Trap (paypal.secure-login.xyz)',
+            fn: () => {
+              const r = analyzeUrlInput('http://paypal.secure-login.xyz/auth');
+              return r.signals.some(s => s.id === 'URL_BRAND_IN_SUBDOMAIN') && r.signals.some(s => s.id === 'URL_SUSPICIOUS_TLD');
+            }
+          },
+          {
+            name: '9. URL Raw IP & @ Redirection Trick Detection',
+            fn: () => {
+              const r = analyzeUrlInput('http://onlinesbi.sbi@192.0.2.88/login');
+              return r.signals.some(s => s.id === 'URL_RAW_IP') && r.signals.some(s => s.id === 'URL_AT_TRICK');
+            }
+          },
+          {
+            name: '10. Legitimate Official Indian Bank URL Scores 0',
+            fn: () => {
+              const r = analyzeUrlInput('https://www.onlinesbi.sbi/sbijava/retail/html/faq.html');
+              return r.score === 0 && r.signals.length === 0;
+            }
+          },
+          {
+            name: '11. Email Headers SPF/DMARC Fail & Reply-To Mismatch',
+            fn: () => {
+              const r = analyzeHeadersInput(LURE_DATA.examples.find(e => e.id === 'ex-bad-headers').content);
+              return r.score >= 70 && r.signals.some(s => s.id === 'HDR_SPF_FAIL') && r.signals.some(s => s.id === 'HDR_REPLY_TO_MISMATCH');
+            }
+          },
+          {
+            name: '12. Email Headers Authenticated Pass Scores 0',
+            fn: () => {
+              const r = analyzeHeadersInput(LURE_DATA.examples.find(e => e.id === 'ex-safe-headers').content);
+              return r.score === 0 && r.auth.spf === 'pass' && r.auth.dkim === 'pass' && r.auth.dmarc === 'pass';
+            }
+          }
+        ];
+
+        let passed = 0;
+        console.group('%cLURE ENGINE SELF-TEST (12 CASES)', 'font-weight:bold; font-size:14px; color:#E5471B;');
+        const resultsTable = tests.map(t => {
+          let ok = false;
+          try {
+            ok = Boolean(t.fn());
+          } catch (e) {
+            ok = false;
+          }
+          if (ok) passed++;
+          console.log(`${ok ? 'PASS' : 'FAIL'} — ${t.name}`);
+          return { Test: t.name, Result: ok ? 'PASS' : 'FAIL' };
+        });
+        console.table(resultsTable);
+        console.log(`Summary: ${passed}/${tests.length} tests passed.`);
+        console.groupEnd();
+
+        els.selftestBanner.hidden = false;
+        els.selftestBanner.textContent = `SELF-TEST (#selftest): ${passed}/${tests.length} built-in engine assertions PASSED. Open browser console (F12) for full table.`;
+      }
+
+      function initApp() {
+        // Populate "Try an example" chips
+        LURE_DATA.examples.forEach(ex => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'example-chip';
+          const tag = document.createElement('span');
+          tag.className = 'example-chip-tag';
+          tag.textContent = ex.tag;
+          const name = document.createElement('span');
+          name.className = 'example-chip-name';
+          name.textContent = ex.name;
+          btn.appendChild(tag);
+          btn.appendChild(name);
+
+          btn.addEventListener('click', () => {
+            switchMode(ex.mode, true);
+            els.mainInput.value = ex.content;
+            els.clearInputBtn.hidden = false;
+            els.examplesDrawer.hidden = true;
+            els.tryExampleBtn.setAttribute('aria-expanded', 'false');
+            runMainAnalysis();
+          });
+
+          els.examplesGrid.appendChild(btn);
+        });
+
+        // Mode tabs
+        els.tabs.forEach(tab => {
+          tab.addEventListener('click', () => {
+            switchMode(tab.dataset.mode, false);
+          });
+        });
+
+        // Wordmark reset
+        els.brandResetBtn.addEventListener('click', () => {
+          switchMode('message', false);
+        });
+
+        // Input events
+        els.mainInput.addEventListener('input', () => {
+          els.clearInputBtn.hidden = !els.mainInput.value.trim();
+        });
+
+        els.clearInputBtn.addEventListener('click', () => {
+          els.mainInput.value = '';
+          resetAnalysisOutput();
+          els.mainInput.focus();
+        });
+
+        els.analyzeBtn.addEventListener('click', runMainAnalysis);
+
+        // Try an example toggle
+        els.tryExampleBtn.addEventListener('click', () => {
+          const isHidden = els.examplesDrawer.hidden;
+          els.examplesDrawer.hidden = !isHidden;
+          els.tryExampleBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+        });
+
+        // Close highlight tooltip
+        els.closeTooltipBtn.addEventListener('click', () => {
+          els.annotationTooltip.hidden = true;
+          document.querySelectorAll('.lure-mark.is-active').forEach(el => el.classList.remove('is-active'));
+        });
+
+        // Expand/collapse all reasons
+        els.expandAllWhyBtn.addEventListener('click', () => {
+          allReasonsExpanded = !allReasonsExpanded;
+          els.expandAllWhyBtn.textContent = allReasonsExpanded ? 'Hide all reasons' : 'Show all reasons';
+          document.querySelectorAll('#findingsList .finding-item').forEach(li => {
+            const d = li.querySelector('.finding-details');
+            const b = li.querySelector('.why-toggle-btn');
+            if (d) d.hidden = !allReasonsExpanded;
+            if (b) b.textContent = allReasonsExpanded ? 'Hide why' : 'Show why';
+          });
+        });
+
+        // Score calculation expander
+        els.calcExpanderBtn.addEventListener('click', () => {
+          const isHidden = els.calcExpanderContent.hidden;
+          els.calcExpanderContent.hidden = !isHidden;
+          els.calcExpanderBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+          els.calcExpanderIcon.textContent = isHidden ? '−' : '+';
+        });
+
+        // Copy defanged URL
+        els.copyDefangedBtn.addEventListener('click', () => {
+          const code = els.defangedUrlCode.textContent;
+          if (!code) return;
+          copyTextToClipboard(code, () => {
+            els.copyDefangedBtn.textContent = 'Copied!';
+            setTimeout(() => { els.copyDefangedBtn.textContent = 'Copy defanged URL'; }, 1800);
+          });
+        });
+
+        // Copy plain-text report
+        els.copyReportBtn.addEventListener('click', () => {
+          if (!lastAnalysisReport) return;
+          copyTextToClipboard(lastAnalysisReport, () => {
+            els.copyReportFeedback.textContent = 'Report copied to clipboard.';
+            setTimeout(() => { els.copyReportFeedback.textContent = ''; }, 2500);
+          });
+        });
+
+        // Optional Ask AI Expander & Buttons
+        els.aiExpanderBtn.addEventListener('click', () => {
+          const isHidden = els.aiExpanderContent.hidden;
+          els.aiExpanderContent.hidden = !isHidden;
+          els.aiExpanderBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+          els.aiExpanderIcon.textContent = isHidden ? '−' : '+';
+        });
+
+        els.askAiBtn.addEventListener('click', requestGeminiSecondOpinion);
+
+        els.clearAiKeyBtn.addEventListener('click', () => {
+          memoryGeminiApiKey = '';
+          els.geminiKeyInput.value = '';
+          els.aiResponseBox.hidden = false;
+          els.aiResponseBox.textContent = 'API key wiped from memory.';
+        });
+
+        // Quiz view toggle & interactions
+        els.quizToggleBtn.addEventListener('click', () => {
+          const showingQuiz = !els.quizView.hidden;
+          if (showingQuiz) {
+            switchMode(currentMode, true);
+          } else {
+            els.analyzerView.hidden = true;
+            els.quizView.hidden = false;
+            els.quizToggleBtn.setAttribute('aria-pressed', 'true');
+            startQuiz();
+          }
+        });
+
+        quizEls.safeBtn.addEventListener('click', () => handleQuizChoice(false));
+        quizEls.phishBtn.addEventListener('click', () => handleQuizChoice(true));
+        quizEls.nextBtn.addEventListener('click', () => {
+          if (quizIndex >= LURE_DATA.quizQuestions.length) {
+            startQuiz();
+          } else {
+            quizIndex++;
+            renderQuizRound();
+          }
+        });
+
+        // Check #selftest on load and hashchange
+        if (window.location.hash === '#selftest') {
+          runSelfTests();
+        }
+        window.addEventListener('hashchange', () => {
+          if (window.location.hash === '#selftest') {
+            runSelfTests();
+          }
+        });
+      }
+
+      initApp();
+    })();
+  </script>
+</body>
+</html>
